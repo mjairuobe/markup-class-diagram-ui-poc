@@ -118,6 +118,26 @@ const MARKER_STYLE: Record<MemberMarker, { fill: string; color: string; label: s
   removed: { fill: "#fecaca", color: "#7f1d1d", label: "entfernt" },
 };
 
+/** Kanten-Labels sitzen in einem festen foreignObject; extra Fläche + Zentrierung verhindert abgeschnittene Hintergrundfarbe. */
+function expandForeignObject(
+  fo: SVGForeignObjectElement,
+  deltaW: number,
+  deltaH: number,
+) {
+  const curW = parseFloat(fo.getAttribute("width") || "0");
+  const curH = parseFloat(fo.getAttribute("height") || "0");
+  const newW = curW + deltaW;
+  const newH = curH + deltaH;
+  const dW = newW - curW;
+  const dH = newH - curH;
+  fo.setAttribute("width", String(newW));
+  fo.setAttribute("height", String(newH));
+  const curX = parseFloat(fo.getAttribute("x") || "0");
+  const curY = parseFloat(fo.getAttribute("y") || "0");
+  fo.setAttribute("x", String(curX - dW / 2));
+  fo.setAttribute("y", String(curY - dH / 2));
+}
+
 function parseHighlights(src: string): Highlight[] {
   const out: Highlight[] = [];
   const re = /%%\s*highlight:\s*([A-Za-z_][\w]*)\.(.+?)\s*=\s*(changed|added|removed)\s*$/gm;
@@ -716,10 +736,14 @@ function App() {
       inner.style.background = style.fill;
       inner.style.color = style.color;
       inner.style.fontWeight = "700";
-      inner.style.borderRadius = "3px";
-      inner.style.padding = "0 4px";
+      inner.style.borderRadius = "5px";
+      inner.style.padding = "4px 12px";
       inner.style.margin = "0";
+      inner.style.boxSizing = "border-box";
+      inner.style.display = "inline-block";
+      inner.style.lineHeight = "1.35";
       if (rm.marker === "removed") inner.style.textDecoration = "line-through";
+      expandForeignObject(target, 16, 12);
     });
   }
 
@@ -754,19 +778,23 @@ function App() {
       oldEl.style.color = removed.color;
       oldEl.style.textDecoration = "line-through";
       oldEl.style.fontWeight = "700";
-      oldEl.style.borderRadius = "3px";
-      oldEl.style.padding = "0 4px";
+      oldEl.style.borderRadius = "5px";
+      oldEl.style.padding = "4px 12px";
+      oldEl.style.boxSizing = "border-box";
       oldEl.style.display = "block";
-      oldEl.style.marginBottom = "2px";
+      oldEl.style.marginBottom = "4px";
+      oldEl.style.lineHeight = "1.35";
 
       const newEl = document.createElement("span");
       newEl.textContent = r.newLabel;
       newEl.style.background = added.fill;
       newEl.style.color = added.color;
       newEl.style.fontWeight = "700";
-      newEl.style.borderRadius = "3px";
-      newEl.style.padding = "0 4px";
+      newEl.style.borderRadius = "5px";
+      newEl.style.padding = "4px 12px";
+      newEl.style.boxSizing = "border-box";
       newEl.style.display = "block";
+      newEl.style.lineHeight = "1.35";
 
       inner.innerHTML = "";
       inner.style.background = "transparent";
@@ -779,14 +807,14 @@ function App() {
       // Expand the FO to fit two stacked rows + the longer of both labels.
       const charW = 7.5;
       const longer = Math.max(r.oldLabel.length, r.newLabel.length);
-      const wantW = Math.ceil(longer * charW + 16);
+      const wantW = Math.ceil(longer * charW + 40);
       const curW = parseFloat(target.getAttribute("width") || "0");
       const newW = Math.max(curW, wantW);
       const dW = newW - curW;
       target.setAttribute("width", String(newW));
 
       const curH = parseFloat(target.getAttribute("height") || "0");
-      const newH = curH + 18;
+      const newH = curH + 28;
       const dH = newH - curH;
       target.setAttribute("height", String(newH));
 
@@ -796,6 +824,8 @@ function App() {
       const curY = parseFloat(target.getAttribute("y") || "0");
       target.setAttribute("x", String(curX - dW / 2));
       target.setAttribute("y", String(curY - dH / 2));
+
+      expandForeignObject(target, 16, 14);
     });
   }
 
