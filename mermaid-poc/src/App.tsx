@@ -3,6 +3,7 @@ import mermaid from "mermaid";
 
 // Marker werden direkt im Mermaid-Code als Kommentare gesetzt:
 //   %% highlight: <Class>.<MemberLabel> = <markerName>
+//   %% link: <Class>.<MemberLabel> = <https-URL>   (externe Links auf Klassen-Attribute/Methoden)
 //   %% classRename: <NewClassName> = <OldClassName>
 //   %% classMarker: <Class> = <markerName>
 //   %% relationMarker: <Label> = <markerName>
@@ -18,6 +19,7 @@ const DIAGRAM = `classDiagram
   %% highlight: Payment.+amount = removed
   %% highlight: Product.+int objectNumber = removed
   %% highlight: Product.+String SKU = added
+  %% link: Product.+String SKU = https://en.wikipedia.org/wiki/Stock_keeping_unit
   %% highlight: Product.+list_products() = changed
   %% classRename: Product = StorageObject
 
@@ -77,6 +79,7 @@ type ClassRename = { className: string; oldName: string };
 type RelationRename = { newLabel: string; oldLabel: string };
 type ClassMarker = { className: string; marker: MemberMarker };
 type RelationMarker = { label: string; marker: MemberMarker };
+type MemberLink = { className: string; member: string; href: string };
 
 const CLASS_MARKER_STYLE: Record<MemberMarker, { fill: string; stroke: string }> = {
   changed: { fill: "#fef3c7", stroke: "#d97706" },
@@ -144,6 +147,21 @@ function parseRelationRenames(src: string): RelationRename[] {
   return out;
 }
 
+function parseMemberLinks(src: string): MemberLink[] {
+  const out: MemberLink[] = [];
+  const re =
+    /%%\s*link:\s*([A-Za-z_][\w]*)\.(.+?)\s*=\s*(https?:\/\/\S+)\s*$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    out.push({
+      className: m[1],
+      member: m[2].trim(),
+      href: m[3].trim(),
+    });
+  }
+  return out;
+}
+
 function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const offsetsRef = useRef<Record<string, NodeOffset>>({});
@@ -154,6 +172,7 @@ function App() {
   const relationRenames = parseRelationRenames(DIAGRAM);
   const classMarkers = parseClassMarkers(DIAGRAM);
   const relationMarkers = parseRelationMarkers(DIAGRAM);
+  const memberLinks = parseMemberLinks(DIAGRAM);
 
   useEffect(() => {
     const w = window as unknown as {
@@ -188,6 +207,7 @@ function App() {
       applyOffsets();
       applyClassMarkers();
       applyMemberHighlights();
+      applyMemberLinks();
       applyClassRenames();
       applyRelationMarkers();
       applyRelationRenames();
@@ -346,6 +366,79 @@ function App() {
     } catch {
       /* getBBox can throw on detached nodes */
     }
+  }
+
+  function applyMemberLinks() {
+    if (!containerRef.current) return;
+    if (memberLinks.length === 0) return;
+    const nodes = containerRef.current.querySelectorAll<SVGGElement>(
+      "g.node, g.classGroup",
+    );
+    const byClass = new Map<string, MemberLink[]>();
+    memberLinks.forEach((l) => {
+      const arr = byClass.get(l.className) ?? [];
+      arr.push(l);
+      byClass.set(l.className, arr);
+    });
+    nodes.forEach((node) => {
+      const id = nodeId(node);
+      if (!id) return;
+      const list = byClass.get(id);
+      if (!list || list.length === 0) return;
+      list.forEach((l) => linkMemberInNode(node, l));
+    });
+  }
+
+  function linkMemberInNode(classGroup: SVGGElement, l: MemberLink) {
+    const want = normalize(l.member);
+
+    const htmlCandidates = classGroup.querySelectorAll<HTMLElement>(
+      "foreignObject *",
+    );
+    const htmlMatch = findInnermostMatch(Array.from(htmlCandidates), want);
+    if (htmlMatch) {
+      if (htmlMatch.closest("a.poc-member-link")) return;
+      const a = document.createElement("a");
+      a.href = l.href;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.className = "poc-member-link";
+      a.title = l.href;
+      a.style.cursor = "pointer";
+      a.style.textDecoration = "underline";
+      a.style.textUnderlineOffset = "2px";
+      a.style.color = "inherit";
+      const parent = htmlMatch.parentNode;
+      if (!parent) return;
+      parent.insertBefore(a, htmlMatch);
+      a.appendChild(htmlMatch);
+      a.addEventListener("click", (e) => e.stopPropagation(), true);
+      a.addEventListener("pointerdown", (e) => e.stopPropagation(), true);
+      return;
+    }
+
+    const textEls = Array.from(
+      classGroup.querySelectorAll<SVGTextElement | SVGTSpanElement>(
+        "text, tspan",
+      ),
+    );
+    const target = textEls.find(
+      (t) => normalize(t.textContent ?? "") === want,
+    );
+    if (!target) return;
+    const parent = target.parentNode as SVGGElement | null;
+    if (!parent) return;
+    const ns = "http://www.w3.org/2000/svg";
+    const a = document.createElementNS(ns, "a");
+    a.setAttribute("href", l.href);
+    a.setAttribute("target", "_blank");
+    a.setAttribute("rel", "noopener noreferrer");
+    a.setAttribute("class", "poc-member-link");
+    a.style.cursor = "pointer";
+    parent.insertBefore(a, target);
+    a.appendChild(target);
+    a.addEventListener("click", (e) => e.stopPropagation(), true);
+    a.addEventListener("pointerdown", (e) => e.stopPropagation(), true);
   }
 
   function applyClassRenames() {
@@ -751,6 +844,13 @@ function App() {
             <code className="rounded bg-slate-100 px-1 py-0.5">
               %% highlight: Klasse.MemberLabel = changed|added|removed
             </code>
+            <br />
+            <span className="mt-1 inline-block">
+              <code className="rounded bg-slate-100 px-1 py-0.5">
+                %% link: Klasse.MemberLabel = https://…
+              </code>{" "}
+              (öffnet in neuem Tab; Klick stoppt Drag/Selektion)
+            </span>
           </p>
           <pre className="mt-2 overflow-x-auto rounded bg-slate-900 p-3 text-xs leading-relaxed text-slate-100">
             <code>{DIAGRAM}</code>
