@@ -4,6 +4,7 @@ import mermaid from "mermaid";
 // Marker werden direkt im Mermaid-Code als Kommentare gesetzt:
 //   %% highlight: <Class>.<MemberLabel> = <markerName>
 //   %% link: <Class>.<MemberLabel> = <https-URL>   (externe Links auf Klassen-Attribute/Methoden)
+//   %% linkClass: <ClassName> = <https-URL>         (Link auf den Klassennamen im Kastenkopf)
 //   %% classRename: <NewClassName> = <OldClassName>
 //   %% classMarker: <Class> = <markerName>
 //   %% relationMarker: <Label> = <markerName>
@@ -40,6 +41,11 @@ const DIAGRAM = `classDiagram
   %% link: Payment.+String id = https://en.wikipedia.org/w/index.php?search=id
   %% link: Payment.+Float amount = https://en.wikipedia.org/w/index.php?search=amount
   %% link: Payment.+process() = https://en.wikipedia.org/w/index.php?search=process
+  %% linkClass: User = https://en.wikipedia.org/w/index.php?search=User
+  %% linkClass: Order = https://en.wikipedia.org/w/index.php?search=Order
+  %% linkClass: Warehouse = https://en.wikipedia.org/w/index.php?search=Warehouse
+  %% linkClass: Product = https://en.wikipedia.org/w/index.php?search=Product
+  %% linkClass: Payment = https://en.wikipedia.org/w/index.php?search=Payment
 
   class User {
     +String id
@@ -98,6 +104,7 @@ type RelationRename = { newLabel: string; oldLabel: string };
 type ClassMarker = { className: string; marker: MemberMarker };
 type RelationMarker = { label: string; marker: MemberMarker };
 type MemberLink = { className: string; member: string; href: string };
+type ClassNameLink = { className: string; href: string };
 
 const CLASS_MARKER_STYLE: Record<MemberMarker, { fill: string; stroke: string }> = {
   changed: { fill: "#fef3c7", stroke: "#d97706" },
@@ -180,6 +187,17 @@ function parseMemberLinks(src: string): MemberLink[] {
   return out;
 }
 
+function parseClassNameLinks(src: string): ClassNameLink[] {
+  const out: ClassNameLink[] = [];
+  const re =
+    /%%\s*linkClass:\s*([A-Za-z_][\w]*)\s*=\s*(https?:\/\/\S+)\s*$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    out.push({ className: m[1], href: m[2].trim() });
+  }
+  return out;
+}
+
 function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const offsetsRef = useRef<Record<string, NodeOffset>>({});
@@ -191,6 +209,7 @@ function App() {
   const classMarkers = parseClassMarkers(DIAGRAM);
   const relationMarkers = parseRelationMarkers(DIAGRAM);
   const memberLinks = parseMemberLinks(DIAGRAM);
+  const classNameLinks = parseClassNameLinks(DIAGRAM);
 
   useEffect(() => {
     const w = window as unknown as {
@@ -227,6 +246,7 @@ function App() {
       applyMemberHighlights();
       applyMemberLinks();
       applyClassRenames();
+      applyClassTitleLinks();
       applyRelationMarkers();
       applyRelationRenames();
       applySelection();
@@ -303,9 +323,24 @@ function App() {
     return s.replace(/\s+/g, "").trim();
   }
 
+  /** Mermaid source uses ~T~, DOM often shows <T> for generics. */
+  function memberSignatureKey(s: string): string {
+    return normalize(s).replace(/~([^~]+)~/g, "<$1>");
+  }
+
+  function textMatchesMemberLabel(
+    wantFromSource: string,
+    domText: string,
+  ): boolean {
+    const w = normalize(wantFromSource);
+    const d = normalize(domText);
+    if (w === d) return true;
+    return memberSignatureKey(wantFromSource) === memberSignatureKey(domText);
+  }
+
   function highlightMemberInNode(classGroup: SVGGElement, h: Highlight) {
     const style = MARKER_STYLE[h.marker];
-    const want = normalize(h.member);
+    const want = h.member;
 
     // 1) Try HTML labels inside foreignObject (mermaid v11 default).
     const htmlCandidates = classGroup.querySelectorAll<HTMLElement>(
@@ -356,8 +391,8 @@ function App() {
         "text, tspan",
       ),
     );
-    const target = textEls.find(
-      (t) => normalize(t.textContent ?? "") === want,
+    const target = textEls.find((t) =>
+      textMatchesMemberLabel(h.member, t.textContent ?? ""),
     );
     if (!target) return;
 
@@ -366,8 +401,8 @@ function App() {
       const padX = 4;
       const padY = 2;
       const ns = "http://www.w3.org/2000/svg";
-      const parent = target.parentNode as SVGGElement | null;
-      if (!parent) return;
+      const par = target.parentNode as SVGGElement | null;
+      if (!par) return;
       const rect = document.createElementNS(ns, "rect");
       rect.setAttribute("x", String(textBBox.x - padX));
       rect.setAttribute("y", String(textBBox.y - padY));
@@ -378,7 +413,7 @@ function App() {
       rect.setAttribute("fill", style.fill);
       rect.setAttribute("pointer-events", "none");
       rect.setAttribute("class", "poc-member-highlight");
-      parent.insertBefore(rect, target);
+      par.insertBefore(rect, target);
       target.setAttribute("fill", style.color);
       target.style.fontWeight = "700";
     } catch {
@@ -408,12 +443,13 @@ function App() {
   }
 
   function linkMemberInNode(classGroup: SVGGElement, l: MemberLink) {
-    const want = normalize(l.member);
-
     const htmlCandidates = classGroup.querySelectorAll<HTMLElement>(
       "foreignObject *",
     );
-    const htmlMatch = findInnermostMatch(Array.from(htmlCandidates), want);
+    const htmlMatch = findInnermostMatch(
+      Array.from(htmlCandidates),
+      l.member,
+    );
     if (htmlMatch) {
       if (htmlMatch.closest("a.poc-member-link")) return;
       const a = document.createElement("a");
@@ -440,12 +476,12 @@ function App() {
         "text, tspan",
       ),
     );
-    const target = textEls.find(
-      (t) => normalize(t.textContent ?? "") === want,
+    const target = textEls.find((t) =>
+      textMatchesMemberLabel(l.member, t.textContent ?? ""),
     );
     if (!target) return;
-    const parent = target.parentNode as SVGGElement | null;
-    if (!parent) return;
+    const linkParent = target.parentNode as SVGGElement | null;
+    if (!linkParent) return;
     const ns = "http://www.w3.org/2000/svg";
     const a = document.createElementNS(ns, "a");
     a.setAttribute("href", l.href);
@@ -453,10 +489,68 @@ function App() {
     a.setAttribute("rel", "noopener noreferrer");
     a.setAttribute("class", "poc-member-link");
     a.style.cursor = "pointer";
-    parent.insertBefore(a, target);
+    linkParent.insertBefore(a, target);
     a.appendChild(target);
     a.addEventListener("click", (e) => e.stopPropagation(), true);
     a.addEventListener("pointerdown", (e) => e.stopPropagation(), true);
+  }
+
+  function findClassTitleInner(
+    node: SVGGElement,
+    className: string,
+  ): HTMLElement | null {
+    const fos = Array.from(
+      node.querySelectorAll<SVGForeignObjectElement>("foreignObject"),
+    );
+    let bestFo: SVGForeignObjectElement | null = null;
+    let topY = Infinity;
+    for (const fo of fos) {
+      if ((fo.textContent ?? "").trim() !== className) continue;
+      const parent = fo.parentElement;
+      const tr = parent?.getAttribute("transform") || "";
+      const tm = tr.match(/translate\(([-\d.]+)\s*,\s*([-\d.]+)\)/);
+      const y = tm ? parseFloat(tm[2]) : 0;
+      if (y < topY) {
+        topY = y;
+        bestFo = fo;
+      }
+    }
+    if (!bestFo) return null;
+    return bestFo.querySelector<HTMLElement>("p, span, div");
+  }
+
+  function applyClassTitleLinks() {
+    if (!containerRef.current) return;
+    if (classNameLinks.length === 0) return;
+    const byHref = new Map(classNameLinks.map((c) => [c.className, c]));
+    const nodes = containerRef.current.querySelectorAll<SVGGElement>(
+      "g.node, g.classGroup",
+    );
+    nodes.forEach((node) => {
+      const id = nodeId(node);
+      if (!id) return;
+      const cl = byHref.get(id);
+      if (!cl) return;
+      const titleEl = findClassTitleInner(node, id);
+      if (!titleEl) return;
+      if (titleEl.closest("a.poc-classname-link")) return;
+      const a = document.createElement("a");
+      a.href = cl.href;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.className = "poc-classname-link poc-member-link";
+      a.title = cl.href;
+      a.style.cursor = "pointer";
+      a.style.textDecoration = "underline";
+      a.style.textUnderlineOffset = "2px";
+      a.style.color = "inherit";
+      const parent = titleEl.parentNode;
+      if (!parent) return;
+      parent.insertBefore(a, titleEl);
+      a.appendChild(titleEl);
+      a.addEventListener("click", (e) => e.stopPropagation(), true);
+      a.addEventListener("pointerdown", (e) => e.stopPropagation(), true);
+    });
   }
 
   function applyClassRenames() {
@@ -707,7 +801,7 @@ function App() {
 
   function findInnermostMatch(
     elements: HTMLElement[],
-    want: string,
+    memberLabelFromSource: string,
   ): HTMLElement | null {
     // Find elements whose own text (excluding child element text) matches.
     const matches: HTMLElement[] = [];
@@ -717,7 +811,7 @@ function App() {
       el.childNodes.forEach((n) => {
         if (n.nodeType === Node.TEXT_NODE) direct += n.textContent ?? "";
       });
-      if (normalize(direct) === want) {
+      if (textMatchesMemberLabel(memberLabelFromSource, direct)) {
         matches.push(el);
       }
     }
@@ -725,8 +819,11 @@ function App() {
 
     // Fallback: any element whose full textContent matches AND has no child
     // element with the same match (i.e. is innermost).
-    const allMatching = elements.filter(
-      (el) => normalize(el.textContent ?? "") === want,
+    const allMatching = elements.filter((el) =>
+      textMatchesMemberLabel(
+        memberLabelFromSource,
+        el.textContent ?? "",
+      ),
     );
     if (allMatching.length === 0) return null;
     return allMatching.reduce((best, cur) =>
@@ -868,6 +965,15 @@ function App() {
                 %% link: Klasse.MemberLabel = https://…
               </code>{" "}
               (öffnet in neuem Tab; Klick stoppt Drag/Selektion)
+            </span>
+            <br />
+            <span className="mt-1 inline-block">
+              <code className="rounded bg-slate-100 px-1 py-0.5">
+                %% linkClass: Klassenname = https://…
+              </code>{" "}
+              (Link auf den Titel im Klassenrahmen; bei <code>~Typ~</code> in
+              Member-Labels vergleicht der PoC generisch mit der Darstellung
+              <code> &lt;Typ&gt; </code> im SVG)
             </span>
           </p>
           <pre className="mt-2 overflow-x-auto rounded bg-slate-900 p-3 text-xs leading-relaxed text-slate-100">
