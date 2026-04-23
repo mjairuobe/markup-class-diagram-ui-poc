@@ -127,7 +127,12 @@ is_same_workspace_and_healthy() {
 LOCK="${STATE_DIR}/.flock-ctl"
 mkdir -p "$STATE_DIR"
 exec 200>"$LOCK"
-flock 200
+# Ohne -w blockiert ein zweiter Build endlos, wenn der erste in einem hängenden DBus/IO steckt.
+FLOCK_WAIT_SEC="${JENKINS_VITE_FLOCK_WAIT_SEC:-1500}"
+if ! flock -w "$FLOCK_WAIT_SEC" 200; then
+  log "FEHLER: Lock $LOCK nach ${FLOCK_WAIT_SEC}s nicht erhalten (anderer Build blockiert diesen Knoten?)"
+  exit 1
+fi
 
 if is_same_workspace_and_healthy; then
   if [[ -z "${BUILD_NUMBER:-}" ]]; then

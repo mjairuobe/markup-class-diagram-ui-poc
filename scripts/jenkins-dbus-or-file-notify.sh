@@ -54,24 +54,31 @@ try_dbus() {
     sleep 0.35
   fi
 
+  # Ohne timeout kann dbus-send/gdbus bei kaputter Session endlos hängen (wirkt wie „Pipeline läuft ewig“).
+  local dbus_timeout="${JENKINS_VITE_DBUS_CALL_TIMEOUT_SEC:-45}"
   local rc=1
   if command -v dbus-send >/dev/null 2>&1; then
-    if dbus-send --session --print-reply --dest=org.markup.vite.DevServer \
+    if timeout --preserve-status "$dbus_timeout" dbus-send --session --print-reply \
+      --dest=org.markup.vite.DevServer \
       /org/markup/vite/DevServer \
       org.markup.vite.DevServer.PullFromPipeline \
       "string:${BUILD_B}" 2>&1 | tee -a "$LOG"; then
       log "DBus (dbus-send) aufgerufen"
       rc=0
+    else
+      log "DBus (dbus-send) fehlgeschlagen oder Timeout nach ${dbus_timeout}s"
     fi
   fi
   if [[ "$rc" -ne 0 ]] && command -v gdbus >/dev/null 2>&1; then
-    if gdbus call --session \
+    if timeout --preserve-status "$dbus_timeout" gdbus call --session \
       --dest org.markup.vite.DevServer \
       --object-path /org/markup/vite/DevServer \
       --method org.markup.vite.DevServer.PullFromPipeline \
       "(s)" "${BUILD_B}" 2>&1 | tee -a "$LOG"; then
       log "DBus (gdbus) aufgerufen"
       rc=0
+    else
+      log "DBus (gdbus) fehlgeschlagen oder Timeout nach ${dbus_timeout}s"
     fi
   fi
 
