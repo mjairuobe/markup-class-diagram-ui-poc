@@ -138,6 +138,33 @@ function expandForeignObject(
   fo.setAttribute("y", String(curY - dH / 2));
 }
 
+/**
+ * Zentriert das Kanten-Label (Hintergrund) im foreignObject, damit trotz
+ * Mermaids fester Kasten kein scheinbar ungleichmäßiger Seitenabstand entsteht.
+ */
+function centerLabelInEdgeForeignObject(
+  fo: SVGForeignObjectElement,
+  labelEl: HTMLElement,
+) {
+  const root = fo.firstElementChild as HTMLElement | null;
+  if (!root) return;
+  if (root === labelEl) {
+    labelEl.style.display = "block";
+    labelEl.style.width = "fit-content";
+    labelEl.style.maxWidth = "100%";
+    labelEl.style.margin = "0 auto";
+    return;
+  }
+  root.style.display = "flex";
+  root.style.flexDirection = "column";
+  root.style.justifyContent = "center";
+  root.style.alignItems = "center";
+  root.style.width = "100%";
+  root.style.height = "100%";
+  root.style.margin = "0";
+  root.style.boxSizing = "border-box";
+}
+
 function parseHighlights(src: string): Highlight[] {
   const out: Highlight[] = [];
   const re = /%%\s*highlight:\s*([A-Za-z_][\w]*)\.(.+?)\s*=\s*(changed|added|removed)\s*$/gm;
@@ -744,6 +771,7 @@ function App() {
       inner.style.lineHeight = "1.35";
       if (rm.marker === "removed") inner.style.textDecoration = "line-through";
       expandForeignObject(target, 16, 12);
+      centerLabelInEdgeForeignObject(target, inner);
     });
   }
 
@@ -826,6 +854,7 @@ function App() {
       target.setAttribute("y", String(curY - dH / 2));
 
       expandForeignObject(target, 16, 14);
+      centerLabelInEdgeForeignObject(target, inner);
     });
   }
 
