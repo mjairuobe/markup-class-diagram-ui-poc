@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Triggert Pull (DBus mit build_id oder Datei-Fallback), wartet auf pull_ack_<BUILD>
 # (Hot-Reload bestätigt), schreibt HOT_RELOAD_OK ins Log – sonst Exit 1.
+# Pull-Zeilen kommen zusätzlich per DBus-Signal PipelineOutput auf stdout (Jenkins).
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${1:?state dir}"
 TRIGGER_FILE="${STATE_DIR}/pipeline_trigger"
 LOG="${2:-/dev/stdout}"
@@ -45,26 +47,39 @@ try_dbus() {
   [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]] || return 1
   export DBUS_SESSION_BUS_ADDRESS
 
+  local tee_pid=""
+  if [[ -f "${SCRIPT_DIR}/jenkins-dbus-pipeline-output-tee.py" ]]; then
+    python3 "${SCRIPT_DIR}/jenkins-dbus-pipeline-output-tee.py" "${BUILD_B}" &
+    tee_pid=$!
+    sleep 0.35
+  fi
+
+  local rc=1
   if command -v dbus-send >/dev/null 2>&1; then
     if dbus-send --session --print-reply --dest=org.markup.vite.DevServer \
       /org/markup/vite/DevServer \
       org.markup.vite.DevServer.PullFromPipeline \
-      "string:${BUILD_B}" 2>>"$LOG"; then
+      "string:${BUILD_B}" 2>&1 | tee -a "$LOG"; then
       log "DBus (dbus-send) aufgerufen"
-      return 0
+      rc=0
     fi
   fi
-  if command -v gdbus >/dev/null 2>&1; then
-    if out=$(gdbus call --session \
+  if [[ "$rc" -ne 0 ]] && command -v gdbus >/dev/null 2>&1; then
+    if gdbus call --session \
       --dest org.markup.vite.DevServer \
       --object-path /org/markup/vite/DevServer \
       --method org.markup.vite.DevServer.PullFromPipeline \
-      "(s)" "${BUILD_B}" 2>>"$LOG"); then
-      log "DBus (gdbus) Rückgabe: $out"
-      return 0
+      "(s)" "${BUILD_B}" 2>&1 | tee -a "$LOG"; then
+      log "DBus (gdbus) aufgerufen"
+      rc=0
     fi
   fi
-  return 1
+
+  if [[ -n "${tee_pid}" ]]; then
+    kill "${tee_pid}" 2>/dev/null || true
+    wait "${tee_pid}" 2>/dev/null || true
+  fi
+  return "$rc"
 }
 
 if try_dbus; then
