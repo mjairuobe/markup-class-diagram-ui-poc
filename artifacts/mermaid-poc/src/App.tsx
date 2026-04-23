@@ -3,13 +3,15 @@ import mermaid from "mermaid";
 
 // Marker werden direkt im Mermaid-Code als Kommentare gesetzt:
 //   %% highlight: <Class>.<MemberLabel> = <markerName>
+//   %% classRename: <NewClassName> = <OldClassName>
 // Erlaubte Marker: changed | added | removed
 const DIAGRAM = `classDiagram
   %% highlight: Order.+submit() = added
   %% highlight: Payment.+amount = removed
-  %% highlight: Product.+int productNumber = removed
+  %% highlight: Product.+int objectNumber = removed
   %% highlight: Product.+String SKU = added
   %% highlight: Product.+list_products() = changed
+  %% classRename: Product = StorageObject
 
   class User {
     +String id
@@ -23,7 +25,7 @@ const DIAGRAM = `classDiagram
     +submit()
   }
   class Product {
-    +int productNumber
+    +int objectNumber
     +String SKU
     +String title
     +Float price
@@ -55,6 +57,7 @@ mermaid.initialize({
 type NodeOffset = { x: number; y: number };
 type MemberMarker = "changed" | "added" | "removed";
 type Highlight = { className: string; member: string; marker: MemberMarker };
+type ClassRename = { className: string; oldName: string };
 
 const MARKER_STYLE: Record<MemberMarker, { fill: string; color: string; label: string }> = {
   changed: { fill: "#fde68a", color: "#7c2d12", label: "geändert" },
@@ -76,12 +79,23 @@ function parseHighlights(src: string): Highlight[] {
   return out;
 }
 
+function parseClassRenames(src: string): ClassRename[] {
+  const out: ClassRename[] = [];
+  const re = /%%\s*classRename:\s*([A-Za-z_][\w]*)\s*=\s*([A-Za-z_][\w]*)\s*$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    out.push({ className: m[1], oldName: m[2] });
+  }
+  return out;
+}
+
 function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const offsetsRef = useRef<Record<string, NodeOffset>>({});
   const [selected, setSelected] = useState<string | null>(null);
   const [renderKey, setRenderKey] = useState(0);
   const highlights = parseHighlights(DIAGRAM);
+  const classRenames = parseClassRenames(DIAGRAM);
 
   useEffect(() => {
     const w = window as unknown as {
@@ -115,6 +129,7 @@ function App() {
       attachInteractions();
       applyOffsets();
       applyMemberHighlights();
+      applyClassRenames();
       applySelection();
     }
     render();
@@ -270,6 +285,96 @@ function App() {
     } catch {
       /* getBBox can throw on detached nodes */
     }
+  }
+
+  function applyClassRenames() {
+    if (!containerRef.current) return;
+    const nodes = containerRef.current.querySelectorAll<SVGGElement>(
+      "g.node, g.classGroup",
+    );
+    nodes.forEach((node) => {
+      const id = nodeId(node);
+      if (!id) return;
+      const r = classRenames.find((x) => x.className === id);
+      if (!r) return;
+
+      // Find the title foreignObject (topmost FO whose direct text equals the
+      // class id). The members of the class are usually inside other FOs.
+      const fos = Array.from(
+        node.querySelectorAll<SVGForeignObjectElement>("foreignObject"),
+      );
+      let titleFo: SVGForeignObjectElement | null = null;
+      let topY = Infinity;
+      for (const fo of fos) {
+        const txt = (fo.textContent ?? "").trim();
+        if (txt !== id) continue;
+        const parent = fo.parentElement;
+        const tr = parent?.getAttribute("transform") || "";
+        const tm = tr.match(/translate\(([-\d.]+)\s*,\s*([-\d.]+)\)/);
+        const y = tm ? parseFloat(tm[2]) : 0;
+        if (y < topY) {
+          topY = y;
+          titleFo = fo;
+        }
+      }
+      if (!titleFo) return;
+
+      // 1) Style the new class name as "added" (green). Keep block layout so
+      // the bg fills the row and the text isn't clipped by the fixed FO width.
+      const addedStyle = MARKER_STYLE.added;
+      const titleText = titleFo.querySelector<HTMLElement>("p, span, div");
+      if (titleText) {
+        titleText.style.background = addedStyle.fill;
+        titleText.style.color = addedStyle.color;
+        titleText.style.borderRadius = "3px";
+        titleText.style.margin = "0";
+      }
+
+      // 2) Insert a "removed" badge with the old class name above the box.
+      // We position it relative to the class group's bounding box.
+      let bbox: DOMRect | null = null;
+      try {
+        bbox = (node as unknown as SVGGraphicsElement).getBBox() as DOMRect;
+      } catch {
+        bbox = null;
+      }
+      if (!bbox) return;
+
+      const ns = "http://www.w3.org/2000/svg";
+      const xhtml = "http://www.w3.org/1999/xhtml";
+      const badgeH = 22;
+      const badgeFo = document.createElementNS(ns, "foreignObject");
+      badgeFo.setAttribute("x", String(bbox.x));
+      badgeFo.setAttribute("y", String(bbox.y - badgeH - 4));
+      badgeFo.setAttribute("width", String(bbox.width));
+      badgeFo.setAttribute("height", String(badgeH));
+      badgeFo.setAttribute("class", "poc-class-rename-badge");
+      badgeFo.setAttribute("pointer-events", "none");
+
+      const removedStyle = MARKER_STYLE.removed;
+      const wrap = document.createElementNS(xhtml, "div") as HTMLDivElement;
+      wrap.setAttribute("xmlns", xhtml);
+      wrap.style.width = "100%";
+      wrap.style.height = "100%";
+      wrap.style.display = "flex";
+      wrap.style.alignItems = "center";
+      wrap.style.justifyContent = "center";
+
+      const tag = document.createElementNS(xhtml, "span") as HTMLSpanElement;
+      tag.textContent = r.oldName;
+      tag.style.background = removedStyle.fill;
+      tag.style.color = removedStyle.color;
+      tag.style.fontWeight = "700";
+      tag.style.fontSize = "13px";
+      tag.style.textDecoration = "line-through";
+      tag.style.padding = "1px 8px";
+      tag.style.borderRadius = "4px";
+      tag.style.fontFamily = "inherit";
+
+      wrap.appendChild(tag);
+      badgeFo.appendChild(wrap);
+      node.appendChild(badgeFo);
+    });
   }
 
   function findInnermostMatch(
