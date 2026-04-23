@@ -4,15 +4,18 @@ import mermaid from "mermaid";
 // Marker werden direkt im Mermaid-Code als Kommentare gesetzt:
 //   %% highlight: <Class>.<MemberLabel> = <markerName>
 //   %% classRename: <NewClassName> = <OldClassName>
+//   %% classMarker: <Class> = <markerName>
 // Erlaubte Marker: changed | added | removed
 const DIAGRAM = `classDiagram
+  %% classMarker: User = added
+  %% classMarker: Order = added
+  %% classMarker: Payment = added
   %% highlight: Order.+submit() = added
   %% highlight: Payment.+amount = removed
   %% highlight: Product.+int objectNumber = removed
   %% highlight: Product.+String SKU = added
   %% highlight: Product.+list_products() = changed
   %% classRename: Product = StorageObject
-  %% relationRename: contains = stocks
 
   class User {
     +String id
@@ -24,6 +27,12 @@ const DIAGRAM = `classDiagram
     +String id
     +Date created
     +submit()
+  }
+  class Warehouse {
+    +String id
+    +String location
+    +List~Product~ products
+    +addProduct()
   }
   class Product {
     +int objectNumber
@@ -38,12 +47,9 @@ const DIAGRAM = `classDiagram
     +process()
   }
 
-  User "1" --> "*" Order : places
-  Order "*" --> "*" Product : contains
-  Order "1" --> "1" Payment : paidBy
-
   click User call nodeClicked()
   click Order call nodeClicked()
+  click Warehouse call nodeClicked()
   click Product call nodeClicked()
   click Payment call nodeClicked()
 `;
@@ -60,6 +66,13 @@ type MemberMarker = "changed" | "added" | "removed";
 type Highlight = { className: string; member: string; marker: MemberMarker };
 type ClassRename = { className: string; oldName: string };
 type RelationRename = { newLabel: string; oldLabel: string };
+type ClassMarker = { className: string; marker: MemberMarker };
+
+const CLASS_MARKER_STYLE: Record<MemberMarker, { fill: string; stroke: string }> = {
+  changed: { fill: "#fef3c7", stroke: "#d97706" },
+  added: { fill: "#dcfce7", stroke: "#16a34a" },
+  removed: { fill: "#fee2e2", stroke: "#dc2626" },
+};
 
 const MARKER_STYLE: Record<MemberMarker, { fill: string; color: string; label: string }> = {
   changed: { fill: "#fde68a", color: "#7c2d12", label: "geändert" },
@@ -91,6 +104,16 @@ function parseClassRenames(src: string): ClassRename[] {
   return out;
 }
 
+function parseClassMarkers(src: string): ClassMarker[] {
+  const out: ClassMarker[] = [];
+  const re = /%%\s*classMarker:\s*([A-Za-z_][\w]*)\s*=\s*(changed|added|removed)\s*$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    out.push({ className: m[1], marker: m[2] as MemberMarker });
+  }
+  return out;
+}
+
 function parseRelationRenames(src: string): RelationRename[] {
   const out: RelationRename[] = [];
   const re = /%%\s*relationRename:\s*(.+?)\s*=\s*(.+?)\s*$/gm;
@@ -109,6 +132,7 @@ function App() {
   const highlights = parseHighlights(DIAGRAM);
   const classRenames = parseClassRenames(DIAGRAM);
   const relationRenames = parseRelationRenames(DIAGRAM);
+  const classMarkers = parseClassMarkers(DIAGRAM);
 
   useEffect(() => {
     const w = window as unknown as {
@@ -141,6 +165,7 @@ function App() {
       bindFunctions?.(containerRef.current);
       attachInteractions();
       applyOffsets();
+      applyClassMarkers();
       applyMemberHighlights();
       applyClassRenames();
       applyRelationRenames();
@@ -388,6 +413,30 @@ function App() {
       wrap.appendChild(tag);
       badgeFo.appendChild(wrap);
       node.appendChild(badgeFo);
+    });
+  }
+
+  function applyClassMarkers() {
+    if (!containerRef.current) return;
+    if (classMarkers.length === 0) return;
+    const nodes = containerRef.current.querySelectorAll<SVGGElement>(
+      "g.node, g.classGroup",
+    );
+    nodes.forEach((node) => {
+      const id = nodeId(node);
+      if (!id) return;
+      const cm = classMarkers.find((x) => x.className === id);
+      if (!cm) return;
+      const style = CLASS_MARKER_STYLE[cm.marker];
+      // Color all rect/path backgrounds inside the class group.
+      node.querySelectorAll<SVGRectElement | SVGPathElement>(
+        "rect, path",
+      ).forEach((el) => {
+        el.setAttribute("fill", style.fill);
+        el.setAttribute("stroke", style.stroke);
+        el.setAttribute("stroke-width", "2");
+      });
+      node.classList.add("poc-class-marker", `poc-class-marker--${cm.marker}`);
     });
   }
 
