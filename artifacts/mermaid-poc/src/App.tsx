@@ -450,6 +450,13 @@ function App() {
       const cm = classMarkers.find((x) => x.className === id);
       if (!cm) return;
       const style = CLASS_MARKER_STYLE[cm.marker];
+      // Tint all section rects with the marker fill so the whole class is
+      // visibly colored (green for added, red for removed, yellow for changed).
+      node.querySelectorAll<SVGRectElement | SVGPathElement>(
+        "rect, path",
+      ).forEach((el) => {
+        el.style.setProperty("fill", style.fill, "important");
+      });
       // For added/removed classes: draw a separate thick dashed outer border
       // around the whole class group via getBBox. Other markers keep default.
       if (cm.marker === "added" || cm.marker === "removed") {
@@ -467,8 +474,8 @@ function App() {
           border.setAttribute("fill", "none");
           border.setAttribute("pointer-events", "none");
           border.style.setProperty("stroke", style.stroke, "important");
-          border.style.setProperty("stroke-width", "9px", "important");
-          border.style.setProperty("stroke-dasharray", "16 9", "important");
+          border.style.setProperty("stroke-width", "6px", "important");
+          border.style.setProperty("stroke-dasharray", "12 7", "important");
           border.setAttribute("class", "poc-class-border");
           // Insert as first child so original mermaid content renders ON TOP.
           if (node.firstChild) {
