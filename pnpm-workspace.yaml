@@ -35,6 +35,7 @@ minimumReleaseAgeExclude:
   - stripe-replit-sync
 
 packages:
+  - mermaid-poc
   - artifacts/*
   - lib/*
   - lib/integrations/*
