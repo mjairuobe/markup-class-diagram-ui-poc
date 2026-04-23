@@ -16,7 +16,8 @@ export MARKUP_VITE_GLOBAL_DIR="${MARKUP_VITE_GLOBAL_DIR:-${JENKINS_HOME:-$HOME}/
 export STATE_DIR="$MARKUP_VITE_GLOBAL_DIR"
 mkdir -p "$STATE_DIR"
 
-REPO_LOG="${MARKUP_VITE_LOG:-/var/lib/jenkins/workspace/vitedevserverlog.txt}"
+# Standard: unter STATE_DIR (jenkins-schreibbar). Workspace-Pfad war root-owned → tee im Daemon brach ab.
+REPO_LOG="${MARKUP_VITE_LOG:-${STATE_DIR}/vite-devserver.log}"
 port_file="${STATE_DIR}/port.txt"
 ready_file="${STATE_DIR}/ready.flag"
 active_ws="${STATE_DIR}/active_workspace"
@@ -66,35 +67,56 @@ kill_dbus_stack() {
   rm -f "${STATE_DIR}/dbus.env" "${STATE_DIR}/dbus_service.pid" 2>/dev/null || true
 }
 
+# Rekursiv Kindprozesse beenden (npm/node, disown-Loops im Daemon), dann Wurzel.
+kill_proc_tree() {
+  local pid=$1
+  [[ -n "$pid" ]] && [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+  local ch
+  for ch in $(pgrep -P "$pid" 2>/dev/null || true); do
+    kill_proc_tree "$ch"
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    log "kill_proc_tree: beende PID $pid"
+    kill "$pid" 2>/dev/null || true
+    sleep 0.5
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+}
+
 # Alles beenden, was zu unserem Dev-Server gehört (globaler State)
 aggressive_stop_global() {
-  log "aggressive_stop: Port, DBus, npm, daemon (global)"
+  log "aggressive_stop: Port, DBus, npm, daemon, Kindprozesse (global)"
   if [[ -f "$port_file" ]]; then
     oldp=$(cat "$port_file" 2>/dev/null || true)
     if [[ -n "${oldp:-}" ]] && command -v fuser >/dev/null 2>&1; then
+      log "aggressive_stop: fuser -k TCP $oldp (Vite/npm auf Port)"
       fuser -k "${oldp}/tcp" 2>/dev/null || true
       sleep 1
     fi
   fi
   kill_dbus_stack
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -f "markup_vite_dbus_service.py" 2>/dev/null || true
+  fi
   for name in npm.pid daemon.pid; do
     f="${STATE_DIR}/${name}"
     if [[ -f "$f" ]]; then
-      pid=$(cat "$f" || true)
+      pid=$(tr -d ' \n\r\t' <"$f" || true)
       if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
-        log "beende $name PID $pid"
-        kill "$pid" 2>/dev/null || true
-        sleep 1
-        kill -9 "$pid" 2>/dev/null || true
+        log "aggressive_stop: beende Prozessbaum $name PID $pid"
+        kill_proc_tree "$pid"
+      else
+        log "aggressive_stop: $name enthält PID ${pid:-leer} (nicht lebendig, räume Datei auf)"
       fi
     fi
   done
-  # evtl. hängen gebliebene Hintergrund-Shells mit unserem Script
   if command -v pkill >/dev/null 2>&1; then
     pkill -f "scripts/jenkins-vite-daemon.sh" 2>/dev/null || true
   fi
   cleanup_stale_workspace_ports
-  rm -f "$ready_file" "${STATE_DIR}/port.txt" 2>/dev/null || true
+  rm -f "$ready_file" "${STATE_DIR}/port.txt" \
+    "${STATE_DIR}/npm.pid" "${STATE_DIR}/daemon.pid" \
+    "${STATE_DIR}/dbus.env" "${STATE_DIR}/dbus_service.pid" 2>/dev/null || true
 }
 
 is_port_http_up() {

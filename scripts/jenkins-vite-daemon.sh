@@ -31,18 +31,23 @@ export STATE_DIR="$MARKUP_VITE_GLOBAL_DIR"
 mkdir -p "$STATE_DIR"
 
 if [[ -z "$REPO_LOG" ]]; then
-  REPO_LOG="${MARKUP_VITE_LOG:-/var/lib/jenkins/workspace/vitedevserverlog.txt}"
+  REPO_LOG="${MARKUP_VITE_LOG:-${STATE_DIR}/vite-devserver.log}"
 fi
 mkdir -p "$(dirname "$REPO_LOG")" 2>/dev/null || REPO_LOG="${STATE_DIR}/vite-devserver.log"
 
-log() { echo "[$(date -Is)] $*" | tee -a "$REPO_LOG" >&2; }
-
-log "daemon start branch=$BRANCH workspace=$WORKSPACE"
-log "STATE_DIR (global, ein Server/Knoten)=$STATE_DIR LOG=$REPO_LOG"
+# Kein tee+pipefail: nicht beschreibbare REPO_LOG-Pfade dürfen den Daemon nicht beenden.
+log() {
+  local line="[$(date -Is)] $*"
+  printf '%s\n' "$line" >>"$REPO_LOG" 2>/dev/null || true
+  printf '%s\n' "$line" >&2
+}
 
 echo "$$" >"${STATE_DIR}/daemon.pid"
 echo "$WORKSPACE" >"${STATE_DIR}/active_workspace"
 echo "$BRANCH" >"${STATE_DIR}/active_branch"
+
+log "daemon start branch=$BRANCH workspace=$WORKSPACE"
+log "STATE_DIR (global, ein Server/Knoten)=$STATE_DIR LOG=$REPO_LOG"
 
 : >"${STATE_DIR}/pipeline_trigger"
 touch "${STATE_DIR}/pipeline_trigger"
