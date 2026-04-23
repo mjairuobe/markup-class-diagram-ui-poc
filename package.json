@@ -1,17 +1,12 @@
 {
-  "name": "workspace",
-  "version": "0.0.0",
-  "license": "MIT",
-  "scripts": {
-    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
-    "build": "pnpm run typecheck && pnpm -r --if-present run build",
-    "typecheck:libs": "tsc --build",
-    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./mermaid-poc\" --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
-    "watch": "pnpm --filter @workspace/mermaid-poc run watch"
-  },
+  "name": "markup-class-diagram-ui-poc",
   "private": true,
-  "devDependencies": {
-    "typescript": "~5.9.2",
-    "prettier": "^3.8.1"
+  "workspaces": ["mermaid-poc"],
+  "scripts": {
+    "dev": "npm run dev -w mermaid-poc",
+    "watch": "npm run watch -w mermaid-poc",
+    "build": "npm run build -w mermaid-poc",
+    "serve": "npm run serve -w mermaid-poc",
+    "typecheck": "npm run typecheck -w mermaid-poc"
   }
 }
