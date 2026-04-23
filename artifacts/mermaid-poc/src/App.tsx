@@ -465,10 +465,10 @@ function App() {
           border.setAttribute("rx", "6");
           border.setAttribute("ry", "6");
           border.setAttribute("fill", "none");
-          border.setAttribute("stroke", style.stroke);
-          border.setAttribute("stroke-width", "4");
-          border.setAttribute("stroke-dasharray", "10 6");
           border.setAttribute("pointer-events", "none");
+          border.style.setProperty("stroke", style.stroke, "important");
+          border.style.setProperty("stroke-width", "9px", "important");
+          border.style.setProperty("stroke-dasharray", "16 9", "important");
           border.setAttribute("class", "poc-class-border");
           // Insert as first child so original mermaid content renders ON TOP.
           if (node.firstChild) {
