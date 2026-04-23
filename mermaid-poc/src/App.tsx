@@ -19,9 +19,27 @@ const DIAGRAM = `classDiagram
   %% highlight: Payment.+amount = removed
   %% highlight: Product.+int objectNumber = removed
   %% highlight: Product.+String SKU = added
-  %% link: Product.+String SKU = https://en.wikipedia.org/wiki/Stock_keeping_unit
   %% highlight: Product.+list_products() = changed
   %% classRename: Product = StorageObject
+  %% link: User.+String id = https://en.wikipedia.org/w/index.php?search=id
+  %% link: User.+String name = https://en.wikipedia.org/w/index.php?search=name
+  %% link: User.+login() = https://en.wikipedia.org/w/index.php?search=login
+  %% link: User.+logout() = https://en.wikipedia.org/w/index.php?search=logout
+  %% link: Order.+String id = https://en.wikipedia.org/w/index.php?search=id
+  %% link: Order.+Date created = https://en.wikipedia.org/w/index.php?search=created
+  %% link: Order.+submit() = https://en.wikipedia.org/w/index.php?search=submit
+  %% link: Warehouse.+String id = https://en.wikipedia.org/w/index.php?search=id
+  %% link: Warehouse.+String location = https://en.wikipedia.org/w/index.php?search=location
+  %% link: Warehouse.+List~Product~ products = https://en.wikipedia.org/w/index.php?search=products
+  %% link: Warehouse.+addProduct() = https://en.wikipedia.org/w/index.php?search=addProduct
+  %% link: Product.+int objectNumber = https://en.wikipedia.org/w/index.php?search=objectNumber
+  %% link: Product.+String SKU = https://en.wikipedia.org/w/index.php?search=SKU
+  %% link: Product.+String title = https://en.wikipedia.org/w/index.php?search=title
+  %% link: Product.+Float price = https://en.wikipedia.org/w/index.php?search=price
+  %% link: Product.+list_products() = https://en.wikipedia.org/w/index.php?search=list_products
+  %% link: Payment.+String id = https://en.wikipedia.org/w/index.php?search=id
+  %% link: Payment.+Float amount = https://en.wikipedia.org/w/index.php?search=amount
+  %% link: Payment.+process() = https://en.wikipedia.org/w/index.php?search=process
 
   class User {
     +String id
