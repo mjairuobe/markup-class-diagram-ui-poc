@@ -10,6 +10,7 @@ const DIAGRAM = `classDiagram
   %% highlight: Payment.+amount = removed
   %% highlight: Product.+int productNumber = removed
   %% highlight: Product.+String SKU = added
+  %% highlight: Product.+list_products() = changed
 
   class User {
     +String id
@@ -27,6 +28,7 @@ const DIAGRAM = `classDiagram
     +String SKU
     +String title
     +Float price
+    +list_products()
   }
   class Payment {
     +String id
