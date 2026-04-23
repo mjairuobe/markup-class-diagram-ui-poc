@@ -83,11 +83,9 @@ start_dbus_service() {
 
 start_dbus_service
 
-pick_port() {
-  node -e "const s=require('net').createServer();s.listen(0,()=>{console.log(s.address().port);s.close();});" 2>/dev/null \
-    || python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()"
-}
-export PORT="${PORT:-$(pick_port)}"
+# Fest wie mermaid-poc/.env.development (PORT); Override: PORT oder MARKUP_VITE_DEV_PORT in der Umgebung.
+: "${MARKUP_VITE_DEV_PORT:=40889}"
+export PORT="${PORT:-$MARKUP_VITE_DEV_PORT}"
 export HOST="${VITE_DEV_HOST:-0.0.0.0}"
 echo "$PORT" >"${STATE_DIR}/port.txt"
 log "VITE nutzt PORT=$PORT (global $STATE_DIR/port.txt)"
