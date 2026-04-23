@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import mermaid from "mermaid";
 
+// Marker werden direkt im Mermaid-Code als Kommentare gesetzt:
+//   %% highlight: <Class>.<MemberLabel> = <markerName>
+// Erlaubte Marker: changed | added | removed
 const DIAGRAM = `classDiagram
+  %% highlight: User.+login() = changed
+  %% highlight: Order.+submit() = added
+  %% highlight: Payment.+amount = removed
+
   class User {
     +String id
     +String name
     +login()
+    +logout()
   }
   class Order {
     +String id
@@ -27,17 +35,10 @@ const DIAGRAM = `classDiagram
   Order "*" --> "*" Product : contains
   Order "1" --> "1" Payment : paidBy
 
-  cssClass "User" highlighted
-  cssClass "Payment" changed
-
   click User call nodeClicked()
   click Order call nodeClicked()
   click Product call nodeClicked()
   click Payment call nodeClicked()
-
-  classDef highlighted fill:#fde68a,stroke:#d97706,stroke-width:3px,color:#7c2d12
-  classDef changed fill:#bbf7d0,stroke:#15803d,stroke-width:3px,color:#14532d
-  classDef selected fill:#bfdbfe,stroke:#1d4ed8,stroke-width:4px,color:#1e3a8a
 `;
 
 mermaid.initialize({
@@ -48,12 +49,35 @@ mermaid.initialize({
 });
 
 type NodeOffset = { x: number; y: number };
+type MemberMarker = "changed" | "added" | "removed";
+type Highlight = { className: string; member: string; marker: MemberMarker };
+
+const MARKER_STYLE: Record<MemberMarker, { fill: string; color: string; label: string }> = {
+  changed: { fill: "#fde68a", color: "#7c2d12", label: "geändert" },
+  added: { fill: "#bbf7d0", color: "#14532d", label: "hinzugefügt" },
+  removed: { fill: "#fecaca", color: "#7f1d1d", label: "entfernt" },
+};
+
+function parseHighlights(src: string): Highlight[] {
+  const out: Highlight[] = [];
+  const re = /%%\s*highlight:\s*([A-Za-z_][\w]*)\.(.+?)\s*=\s*(changed|added|removed)\s*$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    out.push({
+      className: m[1],
+      member: m[2].trim(),
+      marker: m[3] as MemberMarker,
+    });
+  }
+  return out;
+}
 
 function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const offsetsRef = useRef<Record<string, NodeOffset>>({});
   const [selected, setSelected] = useState<string | null>(null);
   const [renderKey, setRenderKey] = useState(0);
+  const highlights = parseHighlights(DIAGRAM);
 
   useEffect(() => {
     const w = window as unknown as {
@@ -86,6 +110,7 @@ function App() {
       bindFunctions?.(containerRef.current);
       attachInteractions();
       applyOffsets();
+      applyMemberHighlights();
       applySelection();
     }
     render();
@@ -98,6 +123,14 @@ function App() {
     applySelection();
   }, [selected]);
 
+  function nodeId(node: SVGGElement): string | null {
+    const raw = node.id || "";
+    // Mermaid v11 ids look like "mermaid-svg-0-classId-User-0".
+    const m = raw.match(/(?:classId|flowchart|node)[-_](.+?)[-_]\d+$/);
+    if (m) return m[1];
+    return node.getAttribute("data-id");
+  }
+
   function applySelection() {
     if (!containerRef.current) return;
     const nodes = containerRef.current.querySelectorAll<SVGGElement>(
@@ -106,21 +139,8 @@ function App() {
     nodes.forEach((node) => {
       const id = nodeId(node);
       if (!id) return;
-      if (selected === id) {
-        node.classList.add("poc-selected");
-      } else {
-        node.classList.remove("poc-selected");
-      }
+      node.classList.toggle("poc-selected", selected === id);
     });
-  }
-
-  function nodeId(node: SVGGElement): string | null {
-    const raw = node.id || "";
-    // mermaid v11 ids look like "classId-User-12" or "flowchart-User-12"
-    const m = raw.match(/^(?:classId|flowchart|node)[-_](.+?)[-_]\d+$/);
-    if (m) return m[1];
-    const dataId = node.getAttribute("data-id");
-    return dataId;
   }
 
   function applyOffsets() {
@@ -137,6 +157,141 @@ function App() {
         node.style.transform = `translate(${off.x}px, ${off.y}px)`;
       }
     });
+  }
+
+  function applyMemberHighlights() {
+    if (!containerRef.current) return;
+    const nodes = containerRef.current.querySelectorAll<SVGGElement>(
+      "g.node, g.classGroup",
+    );
+
+    const byClass = new Map<string, Highlight[]>();
+    highlights.forEach((h) => {
+      const arr = byClass.get(h.className) ?? [];
+      arr.push(h);
+      byClass.set(h.className, arr);
+    });
+
+    nodes.forEach((node) => {
+      const id = nodeId(node);
+      if (!id) return;
+      const list = byClass.get(id);
+      if (!list || list.length === 0) return;
+      list.forEach((h) => highlightMemberInNode(node, h));
+    });
+  }
+
+  function normalize(s: string): string {
+    return s.replace(/\s+/g, "").trim();
+  }
+
+  function highlightMemberInNode(classGroup: SVGGElement, h: Highlight) {
+    const style = MARKER_STYLE[h.marker];
+    const want = normalize(h.member);
+
+    // 1) Try HTML labels inside foreignObject (mermaid v11 default).
+    const htmlCandidates = classGroup.querySelectorAll<HTMLElement>(
+      "foreignObject *",
+    );
+    const htmlMatch = findInnermostMatch(Array.from(htmlCandidates), want);
+    if (htmlMatch) {
+      // Style the innermost text element (e.g. <p>) without changing its
+      // box: keep block layout so the bg fills the foreignObject row, but
+      // do NOT add padding/inline-block — that would overflow the fixed
+      // foreignObject width and clip the text.
+      htmlMatch.style.background = style.fill;
+      htmlMatch.style.color = style.color;
+      htmlMatch.style.fontWeight = "700";
+      htmlMatch.style.borderRadius = "3px";
+      htmlMatch.style.margin = "0";
+      htmlMatch.classList.add("poc-member-highlight");
+
+      // Expand the parent foreignObject width a bit so the bolder font
+      // doesn't overflow on the right edge.
+      const fo = htmlMatch.closest("foreignObject");
+      if (fo) {
+        const w = parseFloat(fo.getAttribute("width") || "0");
+        if (!Number.isNaN(w) && w > 0) {
+          fo.setAttribute("width", String(w + 12));
+          // Shift left by 6 to keep it visually centered.
+          const tr = fo.parentElement?.getAttribute("transform") || "";
+          const tm = tr.match(/translate\(([-\d.]+)\s*,\s*([-\d.]+)\)/);
+          if (tm && fo.parentElement) {
+            const nx = parseFloat(tm[1]) - 6;
+            const ny = parseFloat(tm[2]);
+            fo.parentElement.setAttribute(
+              "transform",
+              `translate(${nx},${ny})`,
+            );
+          }
+        }
+      }
+      return;
+    }
+
+    // 2) Fall back to SVG <text>/<tspan> matching.
+    const textEls = Array.from(
+      classGroup.querySelectorAll<SVGTextElement | SVGTSpanElement>(
+        "text, tspan",
+      ),
+    );
+    const target = textEls.find(
+      (t) => normalize(t.textContent ?? "") === want,
+    );
+    if (!target) return;
+
+    try {
+      const textBBox = target.getBBox();
+      const padX = 4;
+      const padY = 2;
+      const ns = "http://www.w3.org/2000/svg";
+      const parent = target.parentNode as SVGGElement | null;
+      if (!parent) return;
+      const rect = document.createElementNS(ns, "rect");
+      rect.setAttribute("x", String(textBBox.x - padX));
+      rect.setAttribute("y", String(textBBox.y - padY));
+      rect.setAttribute("width", String(textBBox.width + padX * 2));
+      rect.setAttribute("height", String(textBBox.height + padY * 2));
+      rect.setAttribute("rx", "3");
+      rect.setAttribute("ry", "3");
+      rect.setAttribute("fill", style.fill);
+      rect.setAttribute("pointer-events", "none");
+      rect.setAttribute("class", "poc-member-highlight");
+      parent.insertBefore(rect, target);
+      target.setAttribute("fill", style.color);
+      target.style.fontWeight = "700";
+    } catch {
+      /* getBBox can throw on detached nodes */
+    }
+  }
+
+  function findInnermostMatch(
+    elements: HTMLElement[],
+    want: string,
+  ): HTMLElement | null {
+    // Find elements whose own text (excluding child element text) matches.
+    const matches: HTMLElement[] = [];
+    for (const el of elements) {
+      // Concat only direct text node children
+      let direct = "";
+      el.childNodes.forEach((n) => {
+        if (n.nodeType === Node.TEXT_NODE) direct += n.textContent ?? "";
+      });
+      if (normalize(direct) === want) {
+        matches.push(el);
+      }
+    }
+    if (matches.length > 0) return matches[matches.length - 1];
+
+    // Fallback: any element whose full textContent matches AND has no child
+    // element with the same match (i.e. is innermost).
+    const allMatching = elements.filter(
+      (el) => normalize(el.textContent ?? "") === want,
+    );
+    if (allMatching.length === 0) return null;
+    return allMatching.reduce((best, cur) =>
+      cur.contains(best) ? best : cur,
+    );
   }
 
   function attachInteractions() {
@@ -182,8 +337,6 @@ function App() {
         const ny = baseY + dy;
         offsetsRef.current[id] = { x: nx, y: ny };
         node.style.transform = `translate(${nx}px, ${ny}px)`;
-        // re-route edges roughly: leave them where they are. Simpler: trigger
-        // CSS-only translate which doesn't update edges. Acceptable for PoC.
       };
 
       const onPointerUp = (ev: PointerEvent) => {
@@ -195,9 +348,7 @@ function App() {
         } catch {
           /* noop */
         }
-        if (moved) {
-          ev.stopPropagation();
-        }
+        if (moved) ev.stopPropagation();
       };
 
       const onClick = (ev: MouseEvent) => {
@@ -229,7 +380,7 @@ function App() {
               Mermaid Klassendiagramm — Interaktiver PoC
             </h1>
             <p className="text-xs text-slate-500 sm:text-sm">
-              Tippen zum Highlighten. Ziehen zum Verschieben.
+              Member-Highlights aus dem Mermaid-Code · Tippen markiert Klasse · Ziehen verschiebt
             </p>
           </div>
           <button
@@ -244,9 +395,10 @@ function App() {
 
       <main className="mx-auto max-w-5xl px-3 py-4">
         <div className="mb-3 flex flex-wrap items-center gap-3 text-xs sm:text-sm">
-          <LegendDot color="#fde68a" border="#d97706" label="highlighted (Mermaid cssClass)" />
-          <LegendDot color="#bbf7d0" border="#15803d" label="changed (Mermaid cssClass)" />
-          <LegendDot color="#bfdbfe" border="#1d4ed8" label="selected (Tap)" />
+          <LegendDot color={MARKER_STYLE.changed.fill} label="geändert" />
+          <LegendDot color={MARKER_STYLE.added.fill} label="hinzugefügt" />
+          <LegendDot color={MARKER_STYLE.removed.fill} label="entfernt" />
+          <LegendDot color="#bfdbfe" label="ausgewählte Klasse (Tap)" border />
           {selected && (
             <span className="rounded-full bg-blue-100 px-2 py-0.5 font-medium text-blue-800">
               Ausgewählt: {selected}
@@ -263,8 +415,14 @@ function App() {
 
         <details className="mt-4 rounded-lg border border-slate-200 bg-white p-3 text-sm shadow-sm">
           <summary className="cursor-pointer font-medium text-slate-700">
-            Mermaid-Quellcode (Marker im Code)
+            Mermaid-Quellcode (Marker als Kommentare)
           </summary>
+          <p className="mt-2 text-xs text-slate-500">
+            Konvention:{" "}
+            <code className="rounded bg-slate-100 px-1 py-0.5">
+              %% highlight: Klasse.MemberLabel = changed|added|removed
+            </code>
+          </p>
           <pre className="mt-2 overflow-x-auto rounded bg-slate-900 p-3 text-xs leading-relaxed text-slate-100">
             <code>{DIAGRAM}</code>
           </pre>
@@ -276,11 +434,9 @@ function App() {
         .mermaid-host g.poc-selected > rect,
         .mermaid-host g.poc-selected > path,
         .mermaid-host g.poc-selected > polygon {
-          fill: #bfdbfe !important;
           stroke: #1d4ed8 !important;
-          stroke-width: 4px !important;
+          stroke-width: 3px !important;
         }
-        .mermaid-host g.poc-selected text { fill: #1e3a8a !important; }
       `}</style>
     </div>
   );
@@ -288,18 +444,21 @@ function App() {
 
 function LegendDot({
   color,
-  border,
   label,
+  border,
 }: {
   color: string;
-  border: string;
   label: string;
+  border?: boolean;
 }) {
   return (
     <span className="inline-flex items-center gap-1.5">
       <span
         className="inline-block h-3 w-3 rounded-sm"
-        style={{ background: color, border: `2px solid ${border}` }}
+        style={{
+          background: color,
+          border: border ? "2px solid #1d4ed8" : "1px solid rgba(0,0,0,0.15)",
+        }}
       />
       <span className="text-slate-700">{label}</span>
     </span>
