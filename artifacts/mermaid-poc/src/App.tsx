@@ -8,6 +8,8 @@ const DIAGRAM = `classDiagram
   %% highlight: User.+login() = changed
   %% highlight: Order.+submit() = added
   %% highlight: Payment.+amount = removed
+  %% highlight: Product.+int productNumber = removed
+  %% highlight: Product.+String SKU = added
 
   class User {
     +String id
@@ -21,7 +23,8 @@ const DIAGRAM = `classDiagram
     +submit()
   }
   class Product {
-    +String sku
+    +int productNumber
+    +String SKU
     +String title
     +Float price
   }
@@ -204,6 +207,9 @@ function App() {
       htmlMatch.style.fontWeight = "700";
       htmlMatch.style.borderRadius = "3px";
       htmlMatch.style.margin = "0";
+      if (h.marker === "removed") {
+        htmlMatch.style.textDecoration = "line-through";
+      }
       htmlMatch.classList.add("poc-member-highlight");
 
       // Expand the parent foreignObject width a bit so the bolder font
