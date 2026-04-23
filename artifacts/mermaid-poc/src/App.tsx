@@ -450,15 +450,36 @@ function App() {
       const cm = classMarkers.find((x) => x.className === id);
       if (!cm) return;
       const style = CLASS_MARKER_STYLE[cm.marker];
-      // Color all rect/path backgrounds inside the class group. Use inline
-      // style with !important since Mermaid's stylesheet otherwise wins.
-      node.querySelectorAll<SVGRectElement | SVGPathElement>(
-        "rect, path",
-      ).forEach((el) => {
-        el.style.setProperty("fill", style.fill, "important");
-        el.style.setProperty("stroke", style.stroke, "important");
-        el.style.setProperty("stroke-width", "2px", "important");
-      });
+      // For added/removed classes: draw a separate thick dashed outer border
+      // around the whole class group via getBBox. Other markers keep default.
+      if (cm.marker === "added" || cm.marker === "removed") {
+        try {
+          const bbox = (node as unknown as SVGGraphicsElement).getBBox();
+          const pad = 6;
+          const ns = "http://www.w3.org/2000/svg";
+          const border = document.createElementNS(ns, "rect");
+          border.setAttribute("x", String(bbox.x - pad));
+          border.setAttribute("y", String(bbox.y - pad));
+          border.setAttribute("width", String(bbox.width + pad * 2));
+          border.setAttribute("height", String(bbox.height + pad * 2));
+          border.setAttribute("rx", "6");
+          border.setAttribute("ry", "6");
+          border.setAttribute("fill", "none");
+          border.setAttribute("stroke", style.stroke);
+          border.setAttribute("stroke-width", "4");
+          border.setAttribute("stroke-dasharray", "10 6");
+          border.setAttribute("pointer-events", "none");
+          border.setAttribute("class", "poc-class-border");
+          // Insert as first child so original mermaid content renders ON TOP.
+          if (node.firstChild) {
+            node.insertBefore(border, node.firstChild);
+          } else {
+            node.appendChild(border);
+          }
+        } catch {
+          /* getBBox can throw on detached nodes */
+        }
+      }
       node.classList.add("poc-class-marker", `poc-class-marker--${cm.marker}`);
     });
   }
