@@ -114,6 +114,91 @@ npm_process_alive() {
   [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null
 }
 
+# Ausführliche Jenkins-Konsolen-Ausgabe: existiert Server? laufen Hintergrundprozesse?
+log_devserver_snapshot() {
+  local p npid act dp http_ok
+  log "--- Zustand Dev-Server (global, dieser Jenkins-Knoten) ---"
+  if [[ -f "$port_file" ]]; then
+    p=$(cat "$port_file" 2>/dev/null || true)
+    log "port.txt: ja → Port=$p"
+    if command -v curl >/dev/null 2>&1; then
+      if curl -s -o /dev/null --connect-timeout 2 "http://127.0.0.1:${p}/" 2>/dev/null; then
+        http_ok=1
+      fi
+    elif timeout 0.4 bash -c "echo > /dev/tcp/127.0.0.1/${p}" 2>/dev/null; then
+      http_ok=1
+    fi
+    if [[ "${http_ok:-0}" -eq 1 ]]; then
+      log "HTTP 127.0.0.1:${p}: erreichbar (Dev-Server antwortet)"
+    else
+      log "HTTP 127.0.0.1:${p}: NICHT erreichbar (kein lauffähiger Server auf diesem Port)"
+    fi
+  else
+    log "port.txt: nein → kein registrierter Dev-Server-Port im State"
+  fi
+
+  if [[ -f "$npm_pid_file" ]]; then
+    npid=$(cat "$npm_pid_file" 2>/dev/null || true)
+    if [[ -n "${npid:-}" ]] && kill -0 "$npid" 2>/dev/null; then
+      log "npm/watch (npm.pid): ja → PID $npid läuft"
+    else
+      log "npm/watch (npm.pid): Datei vorhanden, Prozess PID=${npid:-?} läuft NICHT"
+    fi
+  else
+    log "npm/watch (npm.pid): nein → kein registrierter npm-Hintergrundprozess"
+  fi
+
+  if [[ -f "$active_ws" ]]; then
+    act=$(cat "$active_ws" 2>/dev/null | tr -d '\0' || true)
+    log "active_workspace: ${act:-leer}"
+    if [[ "${act:-}" == "$WORKSPACE" ]]; then
+      log "WORKSPACE: Build entspricht dem aktiven Workspace (gleicher Checkout-Pfad)"
+    else
+      log "WORKSPACE: Build weicht ab (Build=$WORKSPACE)"
+    fi
+  else
+    log "active_workspace: nein (noch kein Workspace vom Daemon gesetzt)"
+  fi
+
+  if [[ -f "${STATE_DIR}/daemon.pid" ]]; then
+    dp=$(cat "${STATE_DIR}/daemon.pid" 2>/dev/null || true)
+    if [[ -n "${dp:-}" ]] && kill -0 "$dp" 2>/dev/null; then
+      log "jenkins-vite-daemon (daemon.pid): ja → PID $dp läuft"
+    else
+      log "jenkins-vite-daemon (daemon.pid): PID ${dp:-?} nicht lebendig (Stale oder beendet)"
+    fi
+  else
+    log "jenkins-vite-daemon (daemon.pid): nein"
+  fi
+  log "--- Ende Zustand ---"
+}
+
+log_why_not_healthy() {
+  local reasons=0
+  if ! is_port_http_up; then
+    log "Grund für Neustart/Fast-Path-Verweigerung: Dev-Server-Port fehlt oder HTTP nicht erreichbar"
+    reasons=1
+  fi
+  if ! npm_process_alive; then
+    log "Grund: kein lebendiger npm/watch-Prozess laut npm.pid"
+    reasons=1
+  fi
+  if [[ ! -f "$active_ws" ]]; then
+    log "Grund: active_workspace fehlt (Daemon hat keinen aktiven Workspace gespeichert)"
+    reasons=1
+  else
+    local act
+    act=$(cat "$active_ws" 2>/dev/null | tr -d '\0' || true)
+    if [[ "$act" != "$WORKSPACE" ]]; then
+      log "Grund: anderer aktiver Workspace (State: ${act:-leer} ≠ Build: $WORKSPACE)"
+      reasons=1
+    fi
+  fi
+  if [[ "$reasons" -eq 0 ]]; then
+    log "Hinweis: Bedingungen laut Skript unerwartet false (Details oben im Snapshot)"
+  fi
+}
+
 # Nur wenn derselbe Job-Workspace noch bedient wird: schnell nur Pull triggern
 is_same_workspace_and_healthy() {
   is_port_http_up || return 1
@@ -134,12 +219,15 @@ if ! flock -w "$FLOCK_WAIT_SEC" 200; then
   exit 1
 fi
 
+log_devserver_snapshot
+
 if is_same_workspace_and_healthy; then
   if [[ -z "${BUILD_NUMBER:-}" ]]; then
     log "FEHLER: BUILD_NUMBER nicht gesetzt (Hot-Reload-Ack unmöglich)"
     exit 1
   fi
-  log "Dev-Server gesund, gleiches WORKSPACE – DBus/Datei-Notify (kein Neustart)"
+  log "Entscheidung: Fast-Path – bestehender Dev-Server ist gesund, gleiches WORKSPACE"
+  log "Aktion: KEIN neuer Hintergrundprozess; nur Notify/Pull (DBus oder Datei)"
   bash "${ROOT}/scripts/jenkins-dbus-or-file-notify.sh" "$STATE_DIR" "$REPO_LOG"
   P=$(cat "$port_file")
   log "VITE_DEV_PORT=$P"
@@ -148,10 +236,12 @@ if is_same_workspace_and_healthy; then
   exit 0
 fi
 
-log "Neustart: anderer Branch/Workspace, oder ungesund/Timeout zuvor – aggressive_stop, dann neuer Start"
+log "Entscheidung: Neustart – Fast-Path nicht möglich (siehe Gründe unten)"
+log_why_not_healthy
+log "Aktion: aggressive_stop (alter Dev-Server/DBus/npm/daemon auf diesem Knoten), danach NEUER Hintergrundprozess"
 aggressive_stop_global
 
-log "starte jenkins-vite-daemon.sh (nohup)…"
+log "Starte NEUEN Hintergrundprozess: nohup → scripts/jenkins-vite-daemon.sh (siehe auch ${STATE_DIR}/daemon.nohup.log)"
 export JENKINS_NODE_COOKIE=
 nohup env SHELL=/bin/bash \
   MARKUP_VITE_GLOBAL_DIR="$STATE_DIR" \
@@ -160,7 +250,9 @@ nohup env SHELL=/bin/bash \
   --branch "$BRANCH" \
   --log "$REPO_LOG" \
   >>"${STATE_DIR}/daemon.nohup.log" 2>&1 &
+DAEMON_BG_PID=$!
 disown || true
+log "Hintergrundprozess gestartet: Shell-PID=$DAEMON_BG_PID (Kind: jenkins-vite-daemon.sh)"
 sleep 2
 
 log "warte auf Vite (max. 15 min)…"
