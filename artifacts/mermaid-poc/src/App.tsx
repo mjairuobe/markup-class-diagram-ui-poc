@@ -5,7 +5,6 @@ import mermaid from "mermaid";
 //   %% highlight: <Class>.<MemberLabel> = <markerName>
 // Erlaubte Marker: changed | added | removed
 const DIAGRAM = `classDiagram
-  %% highlight: User.+login() = changed
   %% highlight: Order.+submit() = added
   %% highlight: Payment.+amount = removed
   %% highlight: Product.+int productNumber = removed
