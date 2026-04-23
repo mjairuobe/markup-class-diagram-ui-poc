@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
 """
-Eigener Session-DBus: org.markup.vite.DevServer, Pfad /org/markup/vite/DevServer,
-Methode PullFromPipeline() -> str.
-
-Voraussetzung: DBUS_SESSION_BUS_ADDRESS gesetzt (z. B. per dbus-launch im Daemon),
-Pakete: python3-dbus, python3-gi (gir1.2-glib-2.0).
-
-Umgebung: MARKUP_VITE_WORKSPACE (Repo-Root), optional MARKUP_VITE_LOG.
+Session-DBus: org.markup.vite.DevServer.PullFromPipeline(build_id: s) -> s
+Führt git pull + npm im Workspace aus, schreibt pull_ack_<build_id> im STATE_DIR
+(Hot-Reload-Bestätigung für Jenkins), dann Rückgabestring.
 """
-
 from __future__ import annotations
 
 import os
@@ -32,10 +27,28 @@ def _log(msg: str) -> None:
     sys.stderr.write(line)
 
 
-def run_git_pull() -> str:
+def _state_dir() -> str:
+    return os.environ.get("MARKUP_VITE_STATE_DIR", "").strip()
+
+
+def _write_ack(build_id: str, ok: bool, detail: str) -> None:
+    sd = _state_dir()
+    if not sd or not build_id or build_id == "0":
+        return
+    try:
+        path = os.path.join(sd, f"pull_ack_{build_id}")
+        prefix = "HOT_RELOAD_OK" if ok else "HOT_RELOAD_ERR"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"{prefix} {detail}\n")
+    except OSError as e:
+        _log(f"ack schreiben fehlgeschlagen: {e}")
+
+
+def run_git_pull() -> tuple[bool, str]:
+    """(success, message für Ack / Dbus-Out)"""
     ws = os.environ.get("MARKUP_VITE_WORKSPACE", "").strip()
     if not ws or not os.path.isdir(ws):
-        return "err: MARKUP_VITE_WORKSPACE ungültig"
+        return False, "err: MARKUP_VITE_WORKSPACE ungültig"
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     r0 = subprocess.run(
         ["git", "fetch", "--all", "--prune"],
@@ -56,7 +69,7 @@ def run_git_pull() -> str:
         timeout=60,
     )
     if r.returncode != 0:
-        return f"err: git rev-parse: {r.stderr or r.stdout}"
+        return False, f"err: git rev-parse: {r.stderr or r.stdout}"
     branch = (r.stdout or "").strip()
     r2 = subprocess.run(
         ["git", "pull", "--ff-only", "origin", branch],
@@ -67,7 +80,8 @@ def run_git_pull() -> str:
         timeout=300,
     )
     if r2.returncode != 0:
-        _log(f"git pull fehlgeschlagen: {r2.stderr or r2.stdout}")
+        _log(f"git pull: {r2.stderr or r2.stdout}")
+        return False, f"err: git pull: {(r2.stderr or r2.stdout)[:500]}"
     r3 = subprocess.run(
         ["npm", "install", "--no-audit", "--no-fund"],
         cwd=ws,
@@ -77,14 +91,13 @@ def run_git_pull() -> str:
         timeout=600,
     )
     if r3.returncode != 0:
-        return f"warn: npm install rc={r3.returncode} {r3.stderr or ''}"
-    return "ok: PullFromPipeline ausgeführt (git+npm)"
+        return False, f"err: npm install rc={r3.returncode} {r3.stderr or ''}"
+    return True, "git+npm (Vite HMR)"
 
 
 def main() -> None:
     try:
         import dbus
-        import dbus.mainloop.glib
         import dbus.service
     except ImportError as e:
         print(f"python3-dbus fehlt: {e}", file=sys.stderr)
@@ -99,16 +112,20 @@ def main() -> None:
     DBusGMainLoop(set_as_default=True)
 
     class Service(dbus.service.Object):  # type: ignore[name-defined, misc]
-        @dbus.service.method(IFACE, in_signature="", out_signature="s")
-        def PullFromPipeline(self) -> str:
-            _log("Methode PullFromPipeline() aufgerufen")
-            return run_git_pull()
+        @dbus.service.method(IFACE, in_signature="s", out_signature="s")
+        def PullFromPipeline(self, build_id: str) -> str:
+            _log(f"PullFromPipeline build_id={build_id!r}")
+            ok, msg = run_git_pull()
+            _write_ack(str(build_id or "0"), ok, msg)
+            if ok:
+                return f"ok: {msg}"
+            return f"err: {msg}"
 
     bus = dbus.SessionBus()
     dbus.service.BusName(BUS, bus)  # type: ignore[func-returns-value]
     Service(bus, OBJ)
 
-    _log(f"DBus-Name {BUS} registriert, Objekt {OBJ}")
+    _log(f"DBus-Name {BUS} registriert, PullFromPipeline(s) aktiv")
     GLib.MainLoop().run()  # type: ignore[attr-defined]
 
 

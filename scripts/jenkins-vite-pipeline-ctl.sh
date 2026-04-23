@@ -130,8 +130,12 @@ exec 200>"$LOCK"
 flock 200
 
 if is_same_workspace_and_healthy; then
+  if [[ -z "${BUILD_NUMBER:-}" ]]; then
+    log "FEHLER: BUILD_NUMBER nicht gesetzt (Hot-Reload-Ack unmöglich)"
+    exit 1
+  fi
   log "Dev-Server gesund, gleiches WORKSPACE – DBus/Datei-Notify (kein Neustart)"
-  bash "${ROOT}/scripts/jenkins-dbus-or-file-notify.sh" "$STATE_DIR" "$REPO_LOG" || true
+  bash "${ROOT}/scripts/jenkins-dbus-or-file-notify.sh" "$STATE_DIR" "$REPO_LOG"
   P=$(cat "$port_file")
   log "VITE_DEV_PORT=$P"
   log "VITE_DEV_LOG=$REPO_LOG"

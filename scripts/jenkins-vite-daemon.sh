@@ -72,6 +72,7 @@ start_dbus_service() {
   export MARKUP_VITE_WORKSPACE="$WORKSPACE"
   export MARKUP_VITE_LOG="$REPO_LOG"
   export MARKUP_VITE_BRANCH="$BRANCH"
+  export MARKUP_VITE_STATE_DIR="$STATE_DIR"
 
   python3 "${SCRIPT_DIR}/markup_vite_dbus_service.py" >>"$REPO_LOG" 2>&1 &
   local p=$!
@@ -126,15 +127,53 @@ disown "$PULL1" 2>/dev/null || true
       last=$now
       log "[file-trigger] pipeline_trigger – pull im active_workspace"
       (
-        set -e
+        set +e
+        build=""
+        if [[ -f "${STATE_DIR}/pipeline_trigger" ]]; then
+          build=$(grep -E '^JENKINS_BUILD=' "${STATE_DIR}/pipeline_trigger" | tail -1 | cut -d= -f2-)
+          build="${build//$'\r'/}"
+          build="${build//$'\n'/}"
+        fi
+        write_ack() {
+          local pfx="$1" msg="$2"
+          if [[ -z "$build" || "$build" == "0" ]]; then
+            return 0
+          fi
+          echo "${pfx} ${msg}" >"${STATE_DIR}/pull_ack_${build}"
+        }
         ws_file="${STATE_DIR}/active_workspace"
-        [[ -f "$ws_file" ]] || exit 0
-        cd "$(cat "$ws_file")" || exit 0
-        git fetch --all --prune
-        b=$(git rev-parse --abbrev-ref HEAD)
-        git pull --ff-only origin "$b" || true
-        npm install --no-audit --no-fund || true
-        log "[file-trigger] fertig"
+        if [[ ! -f "$ws_file" ]]; then
+          log "[file-trigger] kein active_workspace"
+          write_ack "HOT_RELOAD_ERR" "kein active_workspace"
+          exit 0
+        fi
+        if ! cd "$(cat "$ws_file")"; then
+          log "[file-trigger] cd fehlgeschlagen"
+          write_ack "HOT_RELOAD_ERR" "cd fehlgeschlagen"
+          exit 0
+        fi
+        if ! git fetch --all --prune; then
+          log "[file-trigger] git fetch fehlgeschlagen"
+          write_ack "HOT_RELOAD_ERR" "git fetch"
+          exit 0
+        fi
+        b=$(git rev-parse --abbrev-ref HEAD) || {
+          log "[file-trigger] git rev-parse fehlgeschlagen"
+          write_ack "HOT_RELOAD_ERR" "rev-parse"
+          exit 0
+        }
+        if ! git pull --ff-only origin "$b"; then
+          log "[file-trigger] git pull fehlgeschlagen"
+          write_ack "HOT_RELOAD_ERR" "git pull"
+          exit 0
+        fi
+        if ! npm install --no-audit --no-fund; then
+          log "[file-trigger] npm fehlgeschlagen"
+          write_ack "HOT_RELOAD_ERR" "npm install"
+          exit 0
+        fi
+        log "[file-trigger] fertig (ok, pull_ack build=${build:-?})"
+        write_ack "HOT_RELOAD_OK" "git+npm (Vite HMR)"
       ) || true
     fi
   done
