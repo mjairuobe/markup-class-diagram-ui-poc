@@ -5,11 +5,15 @@ import mermaid from "mermaid";
 //   %% highlight: <Class>.<MemberLabel> = <markerName>
 //   %% classRename: <NewClassName> = <OldClassName>
 //   %% classMarker: <Class> = <markerName>
+//   %% relationMarker: <Label> = <markerName>
 // Erlaubte Marker: changed | added | removed
 const DIAGRAM = `classDiagram
   %% classMarker: User = added
   %% classMarker: Order = added
   %% classMarker: Payment = added
+  %% relationMarker: gives = added
+  %% relationMarker: sells = added
+  %% relationMarker: pays = added
   %% highlight: Order.+submit() = added
   %% highlight: Payment.+amount = removed
   %% highlight: Product.+int objectNumber = removed
@@ -47,6 +51,11 @@ const DIAGRAM = `classDiagram
     +process()
   }
 
+  User "1" --> "*" Order : gives
+  Order "*" --> "*" Product : sells
+  Order "1" --> "1" Payment : pays
+  Warehouse "1" --> "*" Product : stores
+
   click User call nodeClicked()
   click Order call nodeClicked()
   click Warehouse call nodeClicked()
@@ -67,6 +76,7 @@ type Highlight = { className: string; member: string; marker: MemberMarker };
 type ClassRename = { className: string; oldName: string };
 type RelationRename = { newLabel: string; oldLabel: string };
 type ClassMarker = { className: string; marker: MemberMarker };
+type RelationMarker = { label: string; marker: MemberMarker };
 
 const CLASS_MARKER_STYLE: Record<MemberMarker, { fill: string; stroke: string }> = {
   changed: { fill: "#fef3c7", stroke: "#d97706" },
@@ -114,6 +124,16 @@ function parseClassMarkers(src: string): ClassMarker[] {
   return out;
 }
 
+function parseRelationMarkers(src: string): RelationMarker[] {
+  const out: RelationMarker[] = [];
+  const re = /%%\s*relationMarker:\s*(.+?)\s*=\s*(changed|added|removed)\s*$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    out.push({ label: m[1].trim(), marker: m[2] as MemberMarker });
+  }
+  return out;
+}
+
 function parseRelationRenames(src: string): RelationRename[] {
   const out: RelationRename[] = [];
   const re = /%%\s*relationRename:\s*(.+?)\s*=\s*(.+?)\s*$/gm;
@@ -133,6 +153,7 @@ function App() {
   const classRenames = parseClassRenames(DIAGRAM);
   const relationRenames = parseRelationRenames(DIAGRAM);
   const classMarkers = parseClassMarkers(DIAGRAM);
+  const relationMarkers = parseRelationMarkers(DIAGRAM);
 
   useEffect(() => {
     const w = window as unknown as {
@@ -168,6 +189,7 @@ function App() {
       applyClassMarkers();
       applyMemberHighlights();
       applyClassRenames();
+      applyRelationMarkers();
       applyRelationRenames();
       applySelection();
     }
@@ -428,15 +450,43 @@ function App() {
       const cm = classMarkers.find((x) => x.className === id);
       if (!cm) return;
       const style = CLASS_MARKER_STYLE[cm.marker];
-      // Color all rect/path backgrounds inside the class group.
+      // Color all rect/path backgrounds inside the class group. Use inline
+      // style with !important since Mermaid's stylesheet otherwise wins.
       node.querySelectorAll<SVGRectElement | SVGPathElement>(
         "rect, path",
       ).forEach((el) => {
-        el.setAttribute("fill", style.fill);
-        el.setAttribute("stroke", style.stroke);
-        el.setAttribute("stroke-width", "2");
+        el.style.setProperty("fill", style.fill, "important");
+        el.style.setProperty("stroke", style.stroke, "important");
+        el.style.setProperty("stroke-width", "2px", "important");
       });
       node.classList.add("poc-class-marker", `poc-class-marker--${cm.marker}`);
+    });
+  }
+
+  function applyRelationMarkers() {
+    if (!containerRef.current) return;
+    if (relationMarkers.length === 0) return;
+    const fos = Array.from(
+      containerRef.current.querySelectorAll<SVGForeignObjectElement>(
+        "foreignObject",
+      ),
+    );
+    relationMarkers.forEach((rm) => {
+      const target = fos.find((fo) => {
+        if (fo.closest("g.classGroup, g.node")) return false;
+        return (fo.textContent ?? "").trim() === rm.label;
+      });
+      if (!target) return;
+      const inner = target.querySelector<HTMLElement>("p, span, div");
+      if (!inner) return;
+      const style = MARKER_STYLE[rm.marker];
+      inner.style.background = style.fill;
+      inner.style.color = style.color;
+      inner.style.fontWeight = "700";
+      inner.style.borderRadius = "3px";
+      inner.style.padding = "0 4px";
+      inner.style.margin = "0";
+      if (rm.marker === "removed") inner.style.textDecoration = "line-through";
     });
   }
 
