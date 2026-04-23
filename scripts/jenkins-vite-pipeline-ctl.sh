@@ -16,7 +16,7 @@ export MARKUP_VITE_GLOBAL_DIR="${MARKUP_VITE_GLOBAL_DIR:-${JENKINS_HOME:-$HOME}/
 export STATE_DIR="$MARKUP_VITE_GLOBAL_DIR"
 mkdir -p "$STATE_DIR"
 
-REPO_LOG="${STATE_DIR}/vite-devserver.log"
+REPO_LOG="${MARKUP_VITE_LOG:-/var/lib/jenkins/workspace/vitedevserverlog.txt}"
 port_file="${STATE_DIR}/port.txt"
 ready_file="${STATE_DIR}/ready.flag"
 active_ws="${STATE_DIR}/active_workspace"

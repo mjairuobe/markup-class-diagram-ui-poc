@@ -20,10 +20,11 @@ BUS = "org.markup.vite.DevServer"
 OBJ = "/org/markup/vite/DevServer"
 IFACE = "org.markup.vite.DevServer"
 _MAX_LINE = 16384
+_DEFAULT_VITE_LOG = "/var/lib/jenkins/workspace/vitedevserverlog.txt"
 
 
 def _log(msg: str) -> None:
-    path = os.environ.get("MARKUP_VITE_LOG", "")
+    path = (os.environ.get("MARKUP_VITE_LOG") or "").strip() or _DEFAULT_VITE_LOG
     line = f"[dbus-service {__import__('datetime').datetime.now().isoformat()}] {msg}\n"
     if path and path not in ("/dev/stdout", "/dev/stderr"):
         try:

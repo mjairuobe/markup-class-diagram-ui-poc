@@ -31,7 +31,7 @@ export STATE_DIR="$MARKUP_VITE_GLOBAL_DIR"
 mkdir -p "$STATE_DIR"
 
 if [[ -z "$REPO_LOG" ]]; then
-  REPO_LOG="${STATE_DIR}/vite-devserver.log"
+  REPO_LOG="${MARKUP_VITE_LOG:-/var/lib/jenkins/workspace/vitedevserverlog.txt}"
 fi
 mkdir -p "$(dirname "$REPO_LOG")" 2>/dev/null || REPO_LOG="${STATE_DIR}/vite-devserver.log"
 
