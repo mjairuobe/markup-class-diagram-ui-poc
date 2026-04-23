@@ -20,7 +20,12 @@ pipeline {
             exit 1
           fi
           chmod +x scripts/jenkins-*.sh 2>/dev/null || true
-          bash scripts/jenkins-vite-pipeline-ctl.sh
+          # Zeilenweise Ausgabe erzwingen (stdout-Puffer), falls der Agent kein TTY nutzt
+          if command -v stdbuf >/dev/null 2>&1; then
+            stdbuf -oL -eL bash scripts/jenkins-vite-pipeline-ctl.sh
+          else
+            bash scripts/jenkins-vite-pipeline-ctl.sh
+          fi
         '''
       }
     }

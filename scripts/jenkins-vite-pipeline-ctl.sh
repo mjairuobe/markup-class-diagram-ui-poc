@@ -22,7 +22,8 @@ ready_file="${STATE_DIR}/ready.flag"
 active_ws="${STATE_DIR}/active_workspace"
 npm_pid_file="${STATE_DIR}/npm.pid"
 
-log() { echo "[pipeline-ctl $(date -Is)] $*"; }
+# Nach stderr: bei Jenkins ist stdout oft block-gepuffert → Konsole wirkt „schwarz“, bis der Puffer voll ist.
+log() { printf '%s\n' "[pipeline-ctl $(date -Is)] $*" >&2; }
 
 log "Branch=$BRANCH WORKSPACE=$WORKSPACE GLOBAL_STATE=$STATE_DIR"
 
@@ -214,10 +215,35 @@ mkdir -p "$STATE_DIR"
 exec 200>"$LOCK"
 # Ohne -w blockiert ein zweiter Build endlos, wenn der erste in einem hängenden DBus/IO steckt.
 FLOCK_WAIT_SEC="${JENKINS_VITE_FLOCK_WAIT_SEC:-1500}"
+
+LOCK_HEARTBEAT_PID=
+lock_heartbeat_start() {
+  (
+    local step=30 s=0
+    while sleep "$step"; do
+      s=$((s + step))
+      log "… warte noch auf Lock (Dev-Server-Steuerung exklusiv pro Knoten): ${s}s / max ${FLOCK_WAIT_SEC}s — $LOCK"
+    done
+  ) &
+  LOCK_HEARTBEAT_PID=$!
+}
+lock_heartbeat_stop() {
+  if [[ -n "${LOCK_HEARTBEAT_PID:-}" ]] && kill -0 "$LOCK_HEARTBEAT_PID" 2>/dev/null; then
+    kill "$LOCK_HEARTBEAT_PID" 2>/dev/null || true
+    wait "$LOCK_HEARTBEAT_PID" 2>/dev/null || true
+  fi
+  LOCK_HEARTBEAT_PID=
+}
+
+log "Lock: versuche exklusiven Zugriff auf $LOCK (Timeout ${FLOCK_WAIT_SEC}s). Bei Stille hier: anderer Job hält vermutlich denselben Lock."
+lock_heartbeat_start
 if ! flock -w "$FLOCK_WAIT_SEC" 200; then
+  lock_heartbeat_stop
   log "FEHLER: Lock $LOCK nach ${FLOCK_WAIT_SEC}s nicht erhalten (anderer Build blockiert diesen Knoten?)"
   exit 1
 fi
+lock_heartbeat_stop
+log "Lock erworben — fahre fort mit Zustandsdiagnose und Dev-Server-Steuerung"
 
 log_devserver_snapshot
 
