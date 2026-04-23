@@ -12,6 +12,7 @@ const DIAGRAM = `classDiagram
   %% highlight: Product.+String SKU = added
   %% highlight: Product.+list_products() = changed
   %% classRename: Product = StorageObject
+  %% relationRename: contains = stocks
 
   class User {
     +String id
@@ -58,6 +59,7 @@ type NodeOffset = { x: number; y: number };
 type MemberMarker = "changed" | "added" | "removed";
 type Highlight = { className: string; member: string; marker: MemberMarker };
 type ClassRename = { className: string; oldName: string };
+type RelationRename = { newLabel: string; oldLabel: string };
 
 const MARKER_STYLE: Record<MemberMarker, { fill: string; color: string; label: string }> = {
   changed: { fill: "#fde68a", color: "#7c2d12", label: "geändert" },
@@ -89,6 +91,16 @@ function parseClassRenames(src: string): ClassRename[] {
   return out;
 }
 
+function parseRelationRenames(src: string): RelationRename[] {
+  const out: RelationRename[] = [];
+  const re = /%%\s*relationRename:\s*(.+?)\s*=\s*(.+?)\s*$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    out.push({ newLabel: m[1].trim(), oldLabel: m[2].trim() });
+  }
+  return out;
+}
+
 function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const offsetsRef = useRef<Record<string, NodeOffset>>({});
@@ -96,6 +108,7 @@ function App() {
   const [renderKey, setRenderKey] = useState(0);
   const highlights = parseHighlights(DIAGRAM);
   const classRenames = parseClassRenames(DIAGRAM);
+  const relationRenames = parseRelationRenames(DIAGRAM);
 
   useEffect(() => {
     const w = window as unknown as {
@@ -130,6 +143,7 @@ function App() {
       applyOffsets();
       applyMemberHighlights();
       applyClassRenames();
+      applyRelationRenames();
       applySelection();
     }
     render();
@@ -374,6 +388,82 @@ function App() {
       wrap.appendChild(tag);
       badgeFo.appendChild(wrap);
       node.appendChild(badgeFo);
+    });
+  }
+
+  function applyRelationRenames() {
+    if (!containerRef.current) return;
+    if (relationRenames.length === 0) return;
+
+    const fos = Array.from(
+      containerRef.current.querySelectorAll<SVGForeignObjectElement>(
+        "foreignObject",
+      ),
+    );
+
+    relationRenames.forEach((r) => {
+      // Find an edge label foreignObject whose direct text equals the new
+      // label and which is NOT inside a class node.
+      const target = fos.find((fo) => {
+        if (fo.closest("g.classGroup, g.node")) return false;
+        return (fo.textContent ?? "").trim() === r.newLabel;
+      });
+      if (!target) return;
+
+      const inner = target.querySelector<HTMLElement>("p, span, div");
+      if (!inner) return;
+
+      const removed = MARKER_STYLE.removed;
+      const added = MARKER_STYLE.added;
+
+      const oldEl = document.createElement("span");
+      oldEl.textContent = r.oldLabel;
+      oldEl.style.background = removed.fill;
+      oldEl.style.color = removed.color;
+      oldEl.style.textDecoration = "line-through";
+      oldEl.style.fontWeight = "700";
+      oldEl.style.borderRadius = "3px";
+      oldEl.style.padding = "0 4px";
+      oldEl.style.display = "block";
+      oldEl.style.marginBottom = "2px";
+
+      const newEl = document.createElement("span");
+      newEl.textContent = r.newLabel;
+      newEl.style.background = added.fill;
+      newEl.style.color = added.color;
+      newEl.style.fontWeight = "700";
+      newEl.style.borderRadius = "3px";
+      newEl.style.padding = "0 4px";
+      newEl.style.display = "block";
+
+      inner.innerHTML = "";
+      inner.style.background = "transparent";
+      inner.style.padding = "0";
+      inner.style.margin = "0";
+      inner.style.textAlign = "center";
+      inner.appendChild(oldEl);
+      inner.appendChild(newEl);
+
+      // Expand the FO to fit two stacked rows + the longer of both labels.
+      const charW = 7.5;
+      const longer = Math.max(r.oldLabel.length, r.newLabel.length);
+      const wantW = Math.ceil(longer * charW + 16);
+      const curW = parseFloat(target.getAttribute("width") || "0");
+      const newW = Math.max(curW, wantW);
+      const dW = newW - curW;
+      target.setAttribute("width", String(newW));
+
+      const curH = parseFloat(target.getAttribute("height") || "0");
+      const newH = curH + 18;
+      const dH = newH - curH;
+      target.setAttribute("height", String(newH));
+
+      // Recenter the FO on its original anchor: shift x left by dW/2 and y
+      // up by dH/2 so the two-line label stays centered on the edge.
+      const curX = parseFloat(target.getAttribute("x") || "0");
+      const curY = parseFloat(target.getAttribute("y") || "0");
+      target.setAttribute("x", String(curX - dW / 2));
+      target.setAttribute("y", String(curY - dH / 2));
     });
   }
 
