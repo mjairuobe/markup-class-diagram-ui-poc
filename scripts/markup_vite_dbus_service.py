@@ -8,9 +8,12 @@ Führt git pull + npm im Workspace aus, schreibt pull_ack_<build_id> im STATE_DI
 Während des Pulls: Signal PipelineOutput(ss) build_id, Zeile — für Jenkins-Konsole.
 Laufend: neue Zeilen aus MARKUP_VITE_LOG (Vite/npm) → PipelineOutput("vite-log", Zeile)
 für Live-Ausgabe in der Pipeline (jenkins-dbus-pipeline-output-tee.py --vite-log).
+
+Implementierung mit dbus-next (asyncio), ohne python3-gi.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import select
 import subprocess
@@ -18,6 +21,15 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+
+try:
+    from dbus_next import BusType, NameFlag, RequestNameReply
+    from dbus_next.aio import MessageBus
+    from dbus_next.service import ServiceInterface, method, signal
+except ImportError as _e:  # pragma: no cover - startup guard
+    _import_err = _e
+else:
+    _import_err = None
 
 BUS = "org.markup.vite.DevServer"
 OBJ = "/org/markup/vite/DevServer"
@@ -222,92 +234,87 @@ def run_git_pull_streaming(
     return True, "git+npm (Vite HMR)"
 
 
-def main() -> None:
-    try:
-        import dbus
-        import dbus.service
-    except ImportError as e:
-        print(f"python3-dbus fehlt: {e}", file=sys.stderr)
-        sys.exit(1)
-    try:
-        from gi.repository import GLib
-    except ImportError as e:
-        print(f"python3-gi fehlt: {e}", file=sys.stderr)
-        sys.exit(1)
-    from dbus.mainloop.glib import DBusGMainLoop  # type: ignore
+class DevServer(ServiceInterface):
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        super().__init__(IFACE)
+        self._loop = loop
 
-    DBusGMainLoop(set_as_default=True)
+    @signal()
+    def PipelineOutput(self, build_id: "s", line: "s") -> "ss":
+        return [build_id, line]
 
-    class Service(dbus.service.Object):  # type: ignore[name-defined, misc]
-        @dbus.service.signal(IFACE, signature="ss")
-        def PipelineOutput(self, build_id: str, line: str) -> None:  # noqa: N802
-            pass
+    def queue_line(self, build_id: str, line: str) -> None:
+        tline = _truncate_line(line)
 
-        def _emit_line(self, build_id: str, line: str) -> bool:
+        def emit() -> None:
+            self.PipelineOutput(build_id, tline)
+
+        self._loop.call_soon_threadsafe(emit)
+
+    @method()
+    async def PullFromPipeline(self, build_id: "s") -> "s":
+        bid = str(build_id or "0")
+        _log(f"PullFromPipeline build_id={bid!r}")
+        loop = asyncio.get_running_loop()
+        outcome: asyncio.Future[tuple[bool, str]] = loop.create_future()
+
+        def worker() -> None:
             try:
-                self.PipelineOutput(build_id, _truncate_line(line))
-            except Exception as e:  # noqa: BLE001
-                _log(f"PipelineOutput signal: {e}")
-            return False
 
-        def _queue_line(self, build_id: str, line: str) -> None:
-            GLib.idle_add(lambda: self._emit_line(build_id, line))  # type: ignore[attr-defined]
+                def emit(line: str) -> None:
+                    self.queue_line(bid, line)
 
-        @dbus.service.method(IFACE, in_signature="s", out_signature="s")
-        def PullFromPipeline(self, build_id: str) -> str:
-            bid = str(build_id or "0")
-            _log(f"PullFromPipeline build_id={bid!r}")
+                emit(
+                    f"[pull] start build_id={bid} "
+                    f"workspace={os.environ.get('MARKUP_VITE_WORKSPACE', '')}"
+                )
+                ok, msg = run_git_pull_streaming(bid, emit)
+                emit(f"[pull] fertig ok={ok} {msg[:200]}")
+                loop.call_soon_threadsafe(outcome.set_result, (ok, msg))
+            except BaseException as e:  # noqa: BLE001
+                loop.call_soon_threadsafe(outcome.set_exception, e)
 
-            done = threading.Event()
-            outcome: list[tuple[bool, str] | None] = [None]
-            err_box: list[BaseException | None] = [None]
+        threading.Thread(target=worker, daemon=True).start()
+        try:
+            ok, msg = await outcome
+        except BaseException as e:  # noqa: BLE001
+            _log(f"PullFromPipeline exception: {e}")
+            _write_ack(bid, False, str(e))
+            return f"err: {e}"
+        if ok:
+            _write_ack(bid, True, msg)
+            return f"ok: {msg}"
+        _write_ack(bid, False, msg)
+        return f"err: {msg}"
 
-            def worker() -> None:
-                try:
 
-                    def emit(line: str) -> None:
-                        self._queue_line(bid, line)
-
-                    emit(f"[pull] start build_id={bid} workspace={os.environ.get('MARKUP_VITE_WORKSPACE', '')}")
-                    ok, msg = run_git_pull_streaming(bid, emit)
-                    outcome[0] = (ok, msg)
-                    emit(f"[pull] fertig ok={ok} {msg[:200]}")
-                except BaseException as e:  # noqa: BLE001
-                    err_box[0] = e
-                finally:
-                    done.set()
-
-            threading.Thread(target=worker, daemon=True).start()
-            ctx = GLib.MainContext.default()
-            while not done.is_set():
-                while ctx.pending():
-                    ctx.iteration(may_block=False)
-                done.wait(0.05)
-
-            if err_box[0] is not None:
-                e = err_box[0]
-                _log(f"PullFromPipeline exception: {e}")
-                _write_ack(bid, False, str(e))
-                return f"err: {e}"
-            if outcome[0] is None:
-                _write_ack(bid, False, "internal: kein Ergebnis")
-                return "err: internal"
-            ok, msg = outcome[0]
-            _write_ack(bid, ok, msg)
-            if ok:
-                return f"ok: {msg}"
-            return f"err: {msg}"
-
-    bus = dbus.SessionBus()
-    dbus.service.BusName(BUS, bus)  # type: ignore[func-returns-value]
-    svc = Service(bus, OBJ)
-    start_vite_log_follower(svc._queue_line)  # type: ignore[attr-defined]
-
+async def _async_main() -> None:
+    bus = await MessageBus(bus_type=BusType.SESSION).connect()
+    loop = asyncio.get_running_loop()
+    iface = DevServer(loop)
+    bus.export(OBJ, iface)
+    reply = await bus.request_name(BUS, NameFlag.REPLACE_EXISTING)
+    if reply not in (
+        RequestNameReply.PRIMARY_OWNER,
+        RequestNameReply.ALREADY_OWNER,
+    ):
+        _log(f"WARN: request_name -> {reply!r} (evtl. kein Primary Owner)")
+    start_vite_log_follower(iface.queue_line)
     _log(
         f"DBus-Name {BUS} registriert; PullFromPipeline(s); "
         f"Vite-Log-Signal build_id={VITE_LOG_SIGNAL_BUILD_ID!r}"
     )
-    GLib.MainLoop().run()  # type: ignore[attr-defined]
+    await bus.wait_for_disconnect()
+
+
+def main() -> None:
+    if _import_err is not None:
+        print(f"dbus-next fehlt: {_import_err} (pip install dbus-next)", file=sys.stderr)
+        sys.exit(1)
+    try:
+        asyncio.run(_async_main())
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

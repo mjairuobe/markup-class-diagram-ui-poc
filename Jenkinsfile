@@ -18,6 +18,7 @@ pipeline {
             echo "WORKSPACE fehlt" >&2
             exit 1
           fi
+          python3 -m pip install --user -q -r scripts/requirements-jenkins-dbus.txt
           chmod +x scripts/jenkins-*.sh 2>/dev/null || true
           # Zeilenweise Ausgabe erzwingen (stdout-Puffer), falls der Agent kein TTY nutzt
           if command -v stdbuf >/dev/null 2>&1; then

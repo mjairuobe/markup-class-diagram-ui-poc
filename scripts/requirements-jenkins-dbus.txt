@@ -1,0 +1,2 @@
+# Reine Python-DBus für Jenkins-Agenten (kein python3-gi / PyGObject).
+dbus-next>=0.2.3,<1

@@ -53,8 +53,12 @@ log "STATE_DIR (global, ein Server/Knoten)=$STATE_DIR LOG=$REPO_LOG"
 touch "${STATE_DIR}/pipeline_trigger"
 
 start_dbus_service() {
-  if ! python3 -c "import dbus" 2>/dev/null; then
-    log "WARN: python3-dbus fehlt – kein DBus"
+  if [[ -n "${WORKSPACE:-}" ]] && [[ -f "${WORKSPACE}/scripts/requirements-jenkins-dbus.txt" ]]; then
+    python3 -m pip install --user -q -r "${WORKSPACE}/scripts/requirements-jenkins-dbus.txt" \
+      2>>"$REPO_LOG" || true
+  fi
+  if ! python3 -c "import dbus_next" 2>/dev/null; then
+    log "WARN: dbus-next fehlt (python3 -m pip install --user dbus-next) – kein DBus"
     : >"${STATE_DIR}/dbus.env"
     return 0
   fi
