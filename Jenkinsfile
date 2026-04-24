@@ -1,5 +1,4 @@
-// Multibranch: gestartet pro Branch. Startet/aktualisiert lang laufenden Vite-Dev-Server
-// (siehe scripts/jenkins-vite-*.sh).
+// Multibranch: Vite-Dev-Server nur über systemd --user + User-D-Bus (siehe deploy/INSTALL-jenkins-user-systemd.txt).
 
 pipeline {
   agent any

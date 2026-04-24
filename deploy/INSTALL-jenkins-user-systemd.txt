@@ -1,20 +1,45 @@
-Einmalige Einrichtung auf dem Jenkins-Agenten (User = jenkins o. ä.)
+Pflicht-Einrichtung auf jedem Jenkins-Agenten, der den Job „Vite remote devserver“ ausführt.
+Ohne diese Schritte schlägt scripts/jenkins-vite-pipeline-ctl.sh mit einer klaren Fehlermeldung fehl (kein flock-Fallback mehr).
 
-1) Als root (Headless, damit /run/user/<uid> dauerhaft existiert):
-   loginctl enable-linger <jenkins-user>
+--- Schritt 1: Linger (root) ---
 
-2) Als jenkins, im ausgecheckten Repo:
-   bash scripts/jenkins-vite-install-user-unit.sh
+Headless-User brauchen eine dauerhafte User-Runtime unter /run/user/<uid>:
 
-3) Pipeline wie gewohnt; bei fehlender Unit meldet jenkins-vite-pipeline-ctl.sh die obige Anleitung.
+  sudo loginctl enable-linger jenkins
 
-Steuerung / Beobachtung (als jenkins, mit gesetztem XDG_RUNTIME_DIR oder aus Login-Session):
+(<jenkins> durch den tatsächlichen Agenten-User ersetzen, z. B. jenkins.)
+
+Danach Jenkins-Agent oder den Rechner neu starten, bis /run/user/<uid> existiert:
+
+  ls -la /run/user/$(id -u jenkins)
+
+--- Schritt 2: Unit installieren (als derselbe User wie der Agent) ---
+
+Im Workspace-Checkout dieses Repos:
+
+  sudo -u jenkins bash -c 'cd /var/lib/jenkins/workspace/<dein-job>/ && bash scripts/jenkins-vite-install-user-unit.sh'
+
+oder interaktiv als jenkins eingeloggt im Repo:
+
+  bash scripts/jenkins-vite-install-user-unit.sh
+
+--- Schritt 3: Pipeline ausführen ---
+
+Der Job schreibt launch.env und startet markup-vite-devserver.service.
+
+--- Steuerung / Logs / D-Bus ---
+
+Als jenkins (XDG_RUNTIME_DIR setzen, falls nötig):
+
   export XDG_RUNTIME_DIR=/run/user/$(id -u)
+
   systemctl --user status markup-vite-devserver.service
   systemctl --user restart markup-vite-devserver.service
-  systemctl --user stop markup-vite-devserver.service
-  busctl --user monitor org.markup.vite.DevServer
   journalctl --user -u markup-vite-devserver.service -f
+  busctl --user monitor org.markup.vite.DevServer
 
-Hinweis: JENKINS_HOME und HOME sollten auf dasselbe Verzeichnis zeigen (üblich: /var/lib/jenkins),
-damit %h in der Unit mit ~/.markup-vite-devserver zusammenpasst.
+--- Hinweise ---
+
+- HOME und JENKINS_HOME sollten übereinstimmen (typisch /var/lib/jenkins), damit %h in der Unit stimmt.
+- Die Unit liegt unter ~/.config/systemd/user/markup-vite-devserver.service .
+- Nach Git-Pull ggf. install-Skript erneut ausführen, wenn sich run-daemon.sh geändert hat.

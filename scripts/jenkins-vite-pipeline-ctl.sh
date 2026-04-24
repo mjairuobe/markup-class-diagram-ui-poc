@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Ein Dev-Server pro Jenkins-Knoten: globaler State unter JENKINS_HOME/.markup-vite-devserver
-# Orchestrierung: bevorzugt systemd --user (markup-vite-devserver.service), sonst Fallback flock+nohup
-# (wenn /run/user/<uid> fehlt oder Unit nicht installiert — z. B. ohne loginctl enable-linger).
-# MARKUP_VITE_REQUIRE_SYSTEMD=1: hart fehlschlagen statt Fallback.
-# Fast-Path: nur wenn HTTP + gleicher WORKSPACE + npm lebt → Notify/Pull (D-Bus oder Datei).
+# Nur systemd --user (markup-vite-devserver.service) + User-D-Bus — kein flock, kein nohup-Fallback.
+# Einmalige Einrichtung auf dem Agenten: siehe deploy/INSTALL-jenkins-user-systemd.txt
+# Fast-Path: HTTP + gleicher WORKSPACE + npm lebt → Notify/Pull (D-Bus oder Datei).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,7 +37,15 @@ USER_UNIT_FILE="${HOME}/.config/systemd/user/${USER_UNIT}"
 
 ensure_user_session() {
   if ! markup_vite_export_user_runtime; then
-    log "FEHLER: /run/user/$(id -u) fehlt (XDG_RUNTIME_DIR). Headless-Agent: sudo loginctl enable-linger $(id -un)"
+    log "FEHLER: /run/user/$(id -u) fehlt — ohne das läuft kein systemd --user für diesen Account."
+    log "Auf dem Jenkins-Knoten als root:"
+    log "  sudo loginctl enable-linger $(id -un)"
+    log "Danach Jenkins-Agent neu starten oder den User einmal interaktiv anmelden."
+    return 1
+  fi
+  if ! systemctl --user show >/dev/null 2>&1; then
+    log "FEHLER: systemctl --user antwortet nicht (User-Manager nicht erreichbar)."
+    log "Prüfen: ls -la /run/user/$(id -u)  und nach enable-linger den Agenten neu starten."
     return 1
   fi
   return 0
@@ -47,7 +54,8 @@ ensure_user_session() {
 ensure_unit_installed() {
   if [[ ! -f "$USER_UNIT_FILE" ]]; then
     log "FEHLER: systemd-User-Unit fehlt: $USER_UNIT_FILE"
-    log "Als $(id -un) einmalig: bash ${ROOT}/scripts/jenkins-vite-install-user-unit.sh"
+    log "Auf dem Knoten als $(id -un), mit ausgechecktem Repo:"
+    log "  bash ${ROOT}/scripts/jenkins-vite-install-user-unit.sh"
     return 1
   fi
   return 0
@@ -301,81 +309,12 @@ run_fast_path_notify() {
 }
 
 mkdir -p "$STATE_DIR"
+rm -f "${STATE_DIR}/.flock-ctl"
 
-USE_SYSTEMD=0
-if [[ -n "${MARKUP_VITE_FORCE_LEGACY:-}" && "${MARKUP_VITE_FORCE_LEGACY}" != "0" ]]; then
-  log "MARKUP_VITE_FORCE_LEGACY — Modus flock+nohup"
-elif [[ -n "${MARKUP_VITE_REQUIRE_SYSTEMD:-}" && "${MARKUP_VITE_REQUIRE_SYSTEMD}" != "0" ]]; then
-  ensure_user_session || exit 1
-  ensure_unit_installed || exit 1
-  USE_SYSTEMD=1
-  log "MARKUP_VITE_REQUIRE_SYSTEMD — nur systemd --user"
-elif markup_vite_export_user_runtime && [[ -f "$USER_UNIT_FILE" ]]; then
-  USE_SYSTEMD=1
-else
-  log "Hinweis: systemd-user nicht nutzbar (/run/user/$(id -u) fehlt oder keine Unit $USER_UNIT_FILE) — Fallback flock+nohup"
-  log "Optimal: sudo loginctl enable-linger $(id -un) && bash ${ROOT}/scripts/jenkins-vite-install-user-unit.sh"
-fi
+ensure_user_session || exit 1
+ensure_unit_installed || exit 1
 
-if [[ "$USE_SYSTEMD" -eq 1 ]]; then
-  log "Steuerung: systemd --user (${USER_UNIT}); D-Bus: busctl --user monitor org.markup.vite.DevServer"
-  log_devserver_snapshot
-  if is_same_workspace_and_healthy; then
-    run_fast_path_notify
-  fi
-  log "Entscheidung: Neustart – Fast-Path nicht möglich (siehe Gründe unten)"
-  log_why_not_healthy
-  log "Aktion: systemctl --user stop ${USER_UNIT}, aggressive_stop, launch.env, systemctl --user start"
-  systemctl --user stop "$USER_UNIT" 2>/dev/null || true
-  sleep 2
-  aggressive_stop_global
-  write_launch_env
-  systemctl --user daemon-reload
-  systemctl --user reset-failed "$USER_UNIT" 2>/dev/null || true
-  if ! systemctl --user start "$USER_UNIT"; then
-    log "FEHLER: systemctl --user start ${USER_UNIT} fehlgeschlagen."
-    log "Log: journalctl --user -u ${USER_UNIT} -n 120 --no-pager"
-    exit 1
-  fi
-  log "systemd: ${USER_UNIT} gestartet"
-  sleep 2
-  wait_for_vite_ready "und: journalctl --user -u ${USER_UNIT} -n 120 --no-pager" || exit 1
-  exit 0
-fi
-
-# --- Legacy: flock + nohup (ohne funktionierenden user-linger / Unit) ---
-LOCK="${STATE_DIR}/.flock-ctl"
-exec 200>"$LOCK"
-FLOCK_WAIT_SEC="${JENKINS_VITE_FLOCK_WAIT_SEC:-1500}"
-LOCK_HEARTBEAT_PID=
-lock_heartbeat_start() {
-  (
-    local step=30 s=0
-    while sleep "$step"; do
-      s=$((s + step))
-      log "… warte auf Lock (flock+nohup-Fallback): ${s}s / max ${FLOCK_WAIT_SEC}s — $LOCK"
-    done
-  ) &
-  LOCK_HEARTBEAT_PID=$!
-}
-lock_heartbeat_stop() {
-  if [[ -n "${LOCK_HEARTBEAT_PID:-}" ]] && kill -0 "$LOCK_HEARTBEAT_PID" 2>/dev/null; then
-    kill "$LOCK_HEARTBEAT_PID" 2>/dev/null || true
-    wait "$LOCK_HEARTBEAT_PID" 2>/dev/null || true
-  fi
-  LOCK_HEARTBEAT_PID=
-}
-
-log "Lock: flock auf $LOCK (Timeout ${FLOCK_WAIT_SEC}s)"
-lock_heartbeat_start
-if ! flock -w "$FLOCK_WAIT_SEC" 200; then
-  lock_heartbeat_stop
-  log "FEHLER: Lock $LOCK nach ${FLOCK_WAIT_SEC}s nicht erhalten"
-  exit 1
-fi
-lock_heartbeat_stop
-log "Lock erworben — flock+nohup-Modus"
-
+log "Steuerung: systemd --user (${USER_UNIT}); D-Bus: busctl --user monitor org.markup.vite.DevServer"
 log_devserver_snapshot
 
 if is_same_workspace_and_healthy; then
@@ -384,22 +323,19 @@ fi
 
 log "Entscheidung: Neustart – Fast-Path nicht möglich (siehe Gründe unten)"
 log_why_not_healthy
-log "Aktion: aggressive_stop, dann nohup jenkins-vite-daemon.sh"
-aggressive_stop_global
-
-log "Starte Hintergrundprozess: nohup → scripts/jenkins-vite-daemon.sh (Log: ${STATE_DIR}/daemon.nohup.log)"
-export JENKINS_NODE_COOKIE=
-nohup env SHELL=/bin/bash \
-  MARKUP_VITE_GLOBAL_DIR="$STATE_DIR" \
-  bash "${ROOT}/scripts/jenkins-vite-daemon.sh" \
-  --workspace "$WORKSPACE" \
-  --branch "$BRANCH" \
-  --log "$REPO_LOG" \
-  >>"${STATE_DIR}/daemon.nohup.log" 2>&1 &
-DAEMON_BG_PID=$!
-disown || true
-log "Hintergrundprozess gestartet: Shell-PID=$DAEMON_BG_PID"
+log "Aktion: systemctl --user stop ${USER_UNIT}, aggressive_stop, launch.env, systemctl --user start"
+systemctl --user stop "$USER_UNIT" 2>/dev/null || true
 sleep 2
-
-wait_for_vite_ready "und ${STATE_DIR}/daemon.nohup.log" || exit 1
+aggressive_stop_global
+write_launch_env
+systemctl --user daemon-reload
+systemctl --user reset-failed "$USER_UNIT" 2>/dev/null || true
+if ! systemctl --user start "$USER_UNIT"; then
+  log "FEHLER: systemctl --user start ${USER_UNIT} fehlgeschlagen."
+  log "Log: journalctl --user -u ${USER_UNIT} -n 120 --no-pager"
+  exit 1
+fi
+log "systemd: ${USER_UNIT} gestartet"
+sleep 2
+wait_for_vite_ready "und: journalctl --user -u ${USER_UNIT} -n 120 --no-pager" || exit 1
 exit 0
