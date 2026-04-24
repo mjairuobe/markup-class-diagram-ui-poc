@@ -22,6 +22,8 @@ OBJ = "/org/markup/vite/DevServer"
 IFACE = "org.markup.vite.DevServer"
 _MAX_LINE = 16384
 _DEFAULT_VITE_LOG = "/var/lib/jenkins/workspace/vitedevserverlog.txt"
+# Jenkins pipeline-ctl: Tee hört auf dieselbe build_id (siehe jenkins-dbus-pipeline-output-tee.py).
+VITE_LOG_SIGNAL_BUILD_ID = "vite-log"
 
 
 def _log(msg: str) -> None:
@@ -38,6 +40,47 @@ def _log(msg: str) -> None:
 
 def _state_dir() -> str:
     return os.environ.get("MARKUP_VITE_STATE_DIR", "").strip()
+
+
+def _vite_log_path() -> str:
+    p = (os.environ.get("MARKUP_VITE_LOG") or "").strip()
+    if p:
+        return p
+    sd = _state_dir()
+    if sd:
+        return os.path.join(sd, "vite-devserver.log")
+    return ""
+
+
+def start_vite_log_follower(queue_line: Callable[[str, str], None]) -> None:
+    """Liest vite-devserver.log inkrementell und sendet Zeilen per PipelineOutput (IPC für Jenkins)."""
+
+    def tail_loop() -> None:
+        log_path = _vite_log_path()
+        last_pos = 0
+        while True:
+            try:
+                if not log_path:
+                    log_path = _vite_log_path()
+                if log_path and os.path.isfile(log_path):
+                    with open(log_path, encoding="utf-8", errors="replace") as f:
+                        st = os.stat(log_path)
+                        if st.st_size < last_pos:
+                            last_pos = 0
+                        f.seek(last_pos)
+                        while True:
+                            raw = f.readline()
+                            if not raw:
+                                break
+                            line = raw.rstrip("\r\n")
+                            if line:
+                                queue_line(VITE_LOG_SIGNAL_BUILD_ID, line)
+                        last_pos = f.tell()
+            except OSError:
+                pass
+            time.sleep(0.45)
+
+    threading.Thread(target=tail_loop, daemon=True).start()
 
 
 def _write_ack(build_id: str, ok: bool, detail: str) -> None:
@@ -255,9 +298,13 @@ def main() -> None:
 
     bus = dbus.SessionBus()
     dbus.service.BusName(BUS, bus)  # type: ignore[func-returns-value]
-    Service(bus, OBJ)
+    svc = Service(bus, OBJ)
+    start_vite_log_follower(svc._queue_line)  # type: ignore[attr-defined]
 
-    _log(f"DBus-Name {BUS} registriert, PullFromPipeline(s) aktiv")
+    _log(
+        f"DBus-Name {BUS} registriert; PullFromPipeline(s); "
+        f"Vite-Log-Signal build_id={VITE_LOG_SIGNAL_BUILD_ID!r}"
+    )
     GLib.MainLoop().run()  # type: ignore[attr-defined]
 
 

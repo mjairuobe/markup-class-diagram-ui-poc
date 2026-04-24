@@ -12,10 +12,15 @@ SIGNAL = "PipelineOutput"
 
 
 def main() -> None:
-    if len(sys.argv) < 2:
-        print("usage: jenkins-dbus-pipeline-output-tee.py <BUILD_NUMBER>", file=sys.stderr)
+    args = [a for a in sys.argv[1:] if a != "--vite-log"]
+    vite_log = "--vite-log" in sys.argv[1:]
+    if len(args) < 1:
+        print(
+            "usage: jenkins-dbus-pipeline-output-tee.py <BUILD_NUMBER> [--vite-log]",
+            file=sys.stderr,
+        )
         sys.exit(2)
-    build_id = sys.argv[1].strip()
+    build_id = args[0].strip()
 
     uid = os.getuid()
     xdg = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
@@ -42,9 +47,12 @@ def main() -> None:
     DBusGMainLoop(set_as_default=True)
     loop = GLib.MainLoop()
 
+    vite_bid = "vite-log"
+
     def on_signal(bid: str, line: str) -> None:
-        if bid == build_id:
-            print(line, flush=True)
+        if bid == build_id or (vite_log and bid == vite_bid):
+            prefix = "[vite] " if vite_log and bid == vite_bid else ""
+            print(f"{prefix}{line}", flush=True)
 
     def quit_loop(*_args: object) -> None:
         loop.quit()

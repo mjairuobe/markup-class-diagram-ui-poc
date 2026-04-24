@@ -278,9 +278,17 @@ is_same_workspace_and_healthy() {
 
 wait_for_vite_ready() {
   local hint="${1:-}"
-  log "warte auf Vite (max. 15 min)…"
+  local tee_pid=""
+  log "warte auf Vite (max. 15 min)… — Live-Zeilen per D-Bus (PipelineOutput build_id=vite-log)"
+  if [[ -f "${ROOT}/scripts/jenkins-dbus-pipeline-output-tee.py" ]] && command -v python3 >/dev/null 2>&1; then
+    python3 "${ROOT}/scripts/jenkins-dbus-pipeline-output-tee.py" "${BUILD_NUMBER:-0}" --vite-log &
+    tee_pid=$!
+    sleep 0.35
+  fi
   for _ in $(seq 1 180); do
     if is_port_http_up && npm_process_alive; then
+      [[ -n "${tee_pid:-}" ]] && kill "$tee_pid" 2>/dev/null || true
+      [[ -n "${tee_pid:-}" ]] && wait "$tee_pid" 2>/dev/null || true
       P=$(cat "$port_file")
       log "VITE_DEV_PORT=$P"
       log "VITE_DEV_LOG=$REPO_LOG"
@@ -289,6 +297,8 @@ wait_for_vite_ready() {
     fi
     sleep 5
   done
+  [[ -n "${tee_pid:-}" ]] && kill "$tee_pid" 2>/dev/null || true
+  [[ -n "${tee_pid:-}" ]] && wait "$tee_pid" 2>/dev/null || true
   log "TIMEOUT. Siehe $REPO_LOG ${hint}"
   return 1
 }
