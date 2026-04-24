@@ -6,6 +6,8 @@ Führt git pull + npm im Workspace aus, schreibt pull_ack_<build_id> im STATE_DI
 (Hot-Reload-Bestätigung für Jenkins), dann Rückgabestring.
 
 Während des Pulls: Signal PipelineOutput(ss) build_id, Zeile — für Jenkins-Konsole.
+Laufend: neue Zeilen aus MARKUP_VITE_LOG (Vite/npm) → PipelineOutput("vite-log", Zeile)
+für Live-Ausgabe in der Pipeline (jenkins-dbus-pipeline-output-tee.py --vite-log).
 """
 from __future__ import annotations
 
