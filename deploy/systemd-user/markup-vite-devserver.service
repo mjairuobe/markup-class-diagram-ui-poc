@@ -1,0 +1,16 @@
+[Unit]
+Description=Markup Vite DevServer (Jenkins user, D-Bus Session/User-Bus)
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+Environment=HOME=%h
+Environment=JENKINS_HOME=%h
+ExecStart=%h/.markup-vite-devserver/run-daemon.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+
+[Install]
+WantedBy=default.target

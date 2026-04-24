@@ -2,6 +2,7 @@
 """Empfängt PipelineOutput-Signale vom DevServer-DBus und schreibt Zeilen auf stdout (Jenkins)."""
 from __future__ import annotations
 
+import os
 import signal
 import sys
 
@@ -15,6 +16,16 @@ def main() -> None:
         print("usage: jenkins-dbus-pipeline-output-tee.py <BUILD_NUMBER>", file=sys.stderr)
         sys.exit(2)
     build_id = sys.argv[1].strip()
+
+    uid = os.getuid()
+    xdg = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
+    os.environ.setdefault("XDG_RUNTIME_DIR", xdg)
+    bus_path = os.path.join(xdg, "bus")
+    if os.path.exists(bus_path):
+        os.environ.setdefault(
+            "DBUS_SESSION_BUS_ADDRESS",
+            f"unix:path={bus_path}",
+        )
 
     try:
         import dbus

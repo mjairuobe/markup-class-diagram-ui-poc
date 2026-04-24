@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Session-DBus: org.markup.vite.DevServer.PullFromPipeline(build_id: s) -> s
+User-Session-DBus (loginctl linger / systemd --user) oder privater dbus-launch:
+org.markup.vite.DevServer.PullFromPipeline(build_id: s) -> s
 Führt git pull + npm im Workspace aus, schreibt pull_ack_<build_id> im STATE_DIR
 (Hot-Reload-Bestätigung für Jenkins), dann Rückgabestring.
 

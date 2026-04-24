@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # Ein Dev-Server pro Jenkins-Knoten: globaler State unter JENKINS_HOME/.markup-vite-devserver
-# Fast-Path (nur Notify): nur wenn HTTP + gleicher WORKSPACE + npm lebt.
-# Sonst: alte Prozesse hart beenden (inkl. alter Branch-port.txt unter workspace), neu starten.
+# Orchestrierung: systemd --user (markup-vite-devserver.service), kein flock.
+# Fast-Path: nur wenn HTTP + gleicher WORKSPACE + npm lebt → Notify/Pull per User-D-Bus.
+# Sonst: systemctl --user stop, aggressive_stop, launch.env, systemctl --user start.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+# shellcheck source=jenkins-vite-user-env.sh
+source "${ROOT}/scripts/jenkins-vite-user-env.sh"
 
 export WORKSPACE="${WORKSPACE:?WORKSPACE muss gesetzt sein (Jenkins)}"
 BRANCH="${BRANCH_NAME:-${GIT_BRANCH#origin/}}"
@@ -27,6 +31,35 @@ npm_pid_file="${STATE_DIR}/npm.pid"
 log() { printf '%s\n' "[pipeline-ctl $(date -Is)] $*" >&2; }
 
 log "Branch=$BRANCH WORKSPACE=$WORKSPACE GLOBAL_STATE=$STATE_DIR"
+
+USER_UNIT="${MARKUP_VITE_SYSTEMD_UNIT:-markup-vite-devserver.service}"
+USER_UNIT_FILE="${HOME}/.config/systemd/user/${USER_UNIT}"
+
+ensure_user_session() {
+  if ! markup_vite_export_user_runtime; then
+    log "FEHLER: /run/user/$(id -u) fehlt (XDG_RUNTIME_DIR). Headless-Agent: sudo loginctl enable-linger $(id -un)"
+    exit 1
+  fi
+}
+
+ensure_unit_installed() {
+  if [[ ! -f "$USER_UNIT_FILE" ]]; then
+    log "FEHLER: systemd-User-Unit fehlt: $USER_UNIT_FILE"
+    log "Als $(id -un) einmalig: bash ${ROOT}/scripts/jenkins-vite-install-user-unit.sh"
+    exit 1
+  fi
+}
+
+write_launch_env() {
+  umask 077
+  {
+    printf 'export WORKSPACE=%q\n' "$WORKSPACE"
+    printf 'export BRANCH=%q\n' "$BRANCH"
+    printf 'export REPO_LOG=%q\n' "$REPO_LOG"
+    printf 'export MARKUP_VITE_DAEMON_SCRIPT=%q\n' "${ROOT}/scripts/jenkins-vite-daemon.sh"
+    printf 'export MARKUP_VITE_GLOBAL_DIR=%q\n' "$STATE_DIR"
+  } >"${STATE_DIR}/launch.env"
+}
 
 # Alte Prozesse, die noch auf irgendeinen alten port.txt aus Branch-Workspaces hören
 cleanup_stale_workspace_ports() {
@@ -232,40 +265,10 @@ is_same_workspace_and_healthy() {
   [[ -n "$act" && "$act" == "$WORKSPACE" ]]
 }
 
-LOCK="${STATE_DIR}/.flock-ctl"
 mkdir -p "$STATE_DIR"
-exec 200>"$LOCK"
-# Ohne -w blockiert ein zweiter Build endlos, wenn der erste in einem hängenden DBus/IO steckt.
-FLOCK_WAIT_SEC="${JENKINS_VITE_FLOCK_WAIT_SEC:-1500}"
-
-LOCK_HEARTBEAT_PID=
-lock_heartbeat_start() {
-  (
-    local step=30 s=0
-    while sleep "$step"; do
-      s=$((s + step))
-      log "… warte noch auf Lock (Dev-Server-Steuerung exklusiv pro Knoten): ${s}s / max ${FLOCK_WAIT_SEC}s — $LOCK"
-    done
-  ) &
-  LOCK_HEARTBEAT_PID=$!
-}
-lock_heartbeat_stop() {
-  if [[ -n "${LOCK_HEARTBEAT_PID:-}" ]] && kill -0 "$LOCK_HEARTBEAT_PID" 2>/dev/null; then
-    kill "$LOCK_HEARTBEAT_PID" 2>/dev/null || true
-    wait "$LOCK_HEARTBEAT_PID" 2>/dev/null || true
-  fi
-  LOCK_HEARTBEAT_PID=
-}
-
-log "Lock: versuche exklusiven Zugriff auf $LOCK (Timeout ${FLOCK_WAIT_SEC}s). Bei Stille hier: anderer Job hält vermutlich denselben Lock."
-lock_heartbeat_start
-if ! flock -w "$FLOCK_WAIT_SEC" 200; then
-  lock_heartbeat_stop
-  log "FEHLER: Lock $LOCK nach ${FLOCK_WAIT_SEC}s nicht erhalten (anderer Build blockiert diesen Knoten?)"
-  exit 1
-fi
-lock_heartbeat_stop
-log "Lock erworben — fahre fort mit Zustandsdiagnose und Dev-Server-Steuerung"
+ensure_user_session
+ensure_unit_installed
+log "Steuerung über systemd --user (${USER_UNIT}), kein flock; D-Bus: busctl --user monitor org.markup.vite.DevServer"
 
 log_devserver_snapshot
 
@@ -275,7 +278,7 @@ if is_same_workspace_and_healthy; then
     exit 1
   fi
   log "Entscheidung: Fast-Path – bestehender Dev-Server ist gesund, gleiches WORKSPACE"
-  log "Aktion: KEIN neuer Hintergrundprozess; nur Notify/Pull (DBus oder Datei)"
+  log "Aktion: kein systemctl restart; nur Notify/Pull (DBus User-Bus oder Datei)"
   bash "${ROOT}/scripts/jenkins-dbus-or-file-notify.sh" "$STATE_DIR" "$REPO_LOG"
   P=$(cat "$port_file")
   log "VITE_DEV_PORT=$P"
@@ -286,21 +289,19 @@ fi
 
 log "Entscheidung: Neustart – Fast-Path nicht möglich (siehe Gründe unten)"
 log_why_not_healthy
-log "Aktion: aggressive_stop (alter Dev-Server/DBus/npm/daemon auf diesem Knoten), danach NEUER Hintergrundprozess"
+log "Aktion: systemctl --user stop ${USER_UNIT}, aggressive_stop (Aufräumen), launch.env schreiben, systemctl --user start"
+systemctl --user stop "$USER_UNIT" 2>/dev/null || true
+sleep 2
 aggressive_stop_global
-
-log "Starte NEUEN Hintergrundprozess: nohup → scripts/jenkins-vite-daemon.sh (siehe auch ${STATE_DIR}/daemon.nohup.log)"
-export JENKINS_NODE_COOKIE=
-nohup env SHELL=/bin/bash \
-  MARKUP_VITE_GLOBAL_DIR="$STATE_DIR" \
-  bash "${ROOT}/scripts/jenkins-vite-daemon.sh" \
-  --workspace "$WORKSPACE" \
-  --branch "$BRANCH" \
-  --log "$REPO_LOG" \
-  >>"${STATE_DIR}/daemon.nohup.log" 2>&1 &
-DAEMON_BG_PID=$!
-disown || true
-log "Hintergrundprozess gestartet: Shell-PID=$DAEMON_BG_PID (Kind: jenkins-vite-daemon.sh)"
+write_launch_env
+systemctl --user daemon-reload
+systemctl --user reset-failed "$USER_UNIT" 2>/dev/null || true
+if ! systemctl --user start "$USER_UNIT"; then
+  log "FEHLER: systemctl --user start ${USER_UNIT} fehlgeschlagen."
+  log "Log: journalctl --user -u ${USER_UNIT} -n 120 --no-pager"
+  exit 1
+fi
+log "systemd: ${USER_UNIT} gestartet (Status: systemctl --user status ${USER_UNIT})"
 sleep 2
 
 log "warte auf Vite (max. 15 min)…"
@@ -315,5 +316,5 @@ for _ in $(seq 1 180); do
   sleep 5
 done
 
-log "TIMEOUT. Siehe $REPO_LOG und ${STATE_DIR}/daemon.nohup.log"
+log "TIMEOUT. Siehe $REPO_LOG und: journalctl --user -u ${USER_UNIT} -n 120 --no-pager"
 exit 1

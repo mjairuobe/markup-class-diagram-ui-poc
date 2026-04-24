@@ -53,27 +53,43 @@ log "STATE_DIR (global, ein Server/Knoten)=$STATE_DIR LOG=$REPO_LOG"
 touch "${STATE_DIR}/pipeline_trigger"
 
 start_dbus_service() {
-  if ! command -v dbus-launch >/dev/null 2>&1; then
-    log "WARN: dbus-launch fehlt (Paket dbus) – kein DBus"
-    : >"${STATE_DIR}/dbus.env"
-    return 0
-  fi
   if ! python3 -c "import dbus" 2>/dev/null; then
-    log "WARN: python3-dbus fehlt – kein DBus (apt: python3-dbus python3-gi)"
+    log "WARN: python3-dbus fehlt – kein DBus"
     : >"${STATE_DIR}/dbus.env"
     return 0
   fi
-  eval "$(dbus-launch --sh-syntax)"
-  {
-    echo "export DBUS_SESSION_BUS_ADDRESS=\"${DBUS_SESSION_BUS_ADDRESS}\""
-    if [[ -n "${DBUS_SESSION_BUS_PID:-}" ]]; then
-      echo "export DBUS_SESSION_BUS_PID=${DBUS_SESSION_BUS_PID}"
-    fi
-  } >"${STATE_DIR}/dbus.env"
-  log "DBus-Session (PID Bus=${DBUS_SESSION_BUS_PID:-?})"
 
-  export DBUS_SESSION_BUS_ADDRESS
-  export DBUS_SESSION_BUS_PID="${DBUS_SESSION_BUS_PID:-}"
+  local uid run user_bus
+  uid=$(id -u)
+  run="/run/user/${uid}"
+  user_bus="${run}/bus"
+
+  # systemd --user / loginctl linger: gemeinsamer User-Session-Bus (kein dbus-launch).
+  if [[ -n "${MARKUP_VITE_USER_SESSION_DBUS:-}" ]] || [[ -S "$user_bus" ]]; then
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$run}"
+    export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+    {
+      echo "export DBUS_SESSION_BUS_ADDRESS=\"${DBUS_SESSION_BUS_ADDRESS}\""
+    } >"${STATE_DIR}/dbus.env"
+    log "DBus User-Session-Bus ($DBUS_SESSION_BUS_ADDRESS)"
+  else
+    if ! command -v dbus-launch >/dev/null 2>&1; then
+      log "WARN: weder $user_bus noch dbus-launch – kein DBus"
+      : >"${STATE_DIR}/dbus.env"
+      return 0
+    fi
+    eval "$(dbus-launch --sh-syntax)"
+    {
+      echo "export DBUS_SESSION_BUS_ADDRESS=\"${DBUS_SESSION_BUS_ADDRESS}\""
+      if [[ -n "${DBUS_SESSION_BUS_PID:-}" ]]; then
+        echo "export DBUS_SESSION_BUS_PID=${DBUS_SESSION_BUS_PID}"
+      fi
+    } >"${STATE_DIR}/dbus.env"
+    log "DBus privater Session-Daemon (dbus-launch, PID Bus=${DBUS_SESSION_BUS_PID:-?})"
+    export DBUS_SESSION_BUS_ADDRESS
+    export DBUS_SESSION_BUS_PID="${DBUS_SESSION_BUS_PID:-}"
+  fi
+
   export MARKUP_VITE_WORKSPACE="$WORKSPACE"
   export MARKUP_VITE_LOG="$REPO_LOG"
   export MARKUP_VITE_BRANCH="$BRANCH"

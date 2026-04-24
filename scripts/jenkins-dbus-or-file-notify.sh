@@ -5,6 +5,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=jenkins-vite-user-env.sh
+source "${SCRIPT_DIR}/jenkins-vite-user-env.sh"
 STATE_DIR="${1:?state dir}"
 TRIGGER_FILE="${STATE_DIR}/pipeline_trigger"
 LOG="${2:-/dev/stdout}"
@@ -41,9 +43,13 @@ wait_pull_ack() {
 }
 
 try_dbus() {
-  [[ -f "${STATE_DIR}/dbus.env" ]] || return 1
-  # shellcheck disable=SC1090
-  source "${STATE_DIR}/dbus.env"
+  if [[ -f "${STATE_DIR}/dbus.env" ]]; then
+    # shellcheck disable=SC1090
+    source "${STATE_DIR}/dbus.env"
+  fi
+  if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]] && markup_vite_export_user_runtime; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+  fi
   [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]] || return 1
   export DBUS_SESSION_BUS_ADDRESS
 
