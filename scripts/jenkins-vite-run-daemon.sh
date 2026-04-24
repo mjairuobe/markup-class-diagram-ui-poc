@@ -6,9 +6,11 @@ set -euo pipefail
 STATE_DIR="${JENKINS_HOME:-$HOME}/.markup-vite-devserver"
 ENV_FILE="${STATE_DIR}/launch.env"
 
+# Ohne launch.env gibt es keinen aktiven Pipeline-Lauf — Exit 0, damit systemd bei
+# Restart=on-failure nicht endlos neu startet (sonst tausende Log-Zeilen pro Leerlauf).
 if [[ ! -f "$ENV_FILE" ]]; then
-  printf '%s\n' "[run-daemon] FEHLER: fehlt $ENV_FILE (von jenkins-vite-pipeline-ctl.sh geschrieben)" >&2
-  exit 1
+  printf '%s\n' "[run-daemon] idle: fehlt $ENV_FILE — wird von jenkins-vite-pipeline-ctl.sh geschrieben, wenn die Pipeline den Dev-Server startet (kein Fehler)." >&2
+  exit 0
 fi
 
 # shellcheck disable=SC1090
