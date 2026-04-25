@@ -1,6 +1,6 @@
 # Mermaid-Klassendiagramm mit Markup (POC)
 
-## Warum das zu meinem Konzept *Mobile-first Review* passt
+## Warum Klassendiagramme mit Markup?
 
 Ich habe in [Mobile-first AI-Review-App (Konzept)](https://github.com/mjairuobe/Mobile-first-AI-Review-App-Konzept-) beschrieben, dass Mobile-First Tools für Softwareentwicklung fehlen, was im AI Zeitalter jedoch von größerer Bedeutung sein kann. Der Schwerpunkt beim Entwickeln von Software rückt ohnehin vom bloßen Tippen zur hin zur Softwarearchitektur – das sind Denkprozesse. Denken kann man von überall aus.
 
